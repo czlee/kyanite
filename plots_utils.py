@@ -24,6 +24,10 @@ abbreviations = {
     'data_per_client': 'dpc',
     'quantization_range': 'qr',
     'zero_bits_strategy': 'zbs',
+    'power_ema_coefficient': 'ema',
+    'power_update_period': 'pup',
+    'power_quantile': 'pq',
+    'power_factor': 'pf',
 }
 
 
