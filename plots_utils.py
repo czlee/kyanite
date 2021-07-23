@@ -85,8 +85,8 @@ def _duration_str(times):
         return f"{seconds} s"
 
 
-def show_start_times(results_dir):
-    """Prints the start times of the earliest and latest experiments in the given directory."""
+def show_timestamp_info(results_dir):
+    """Shows timestamp info of the earliest and latest experiments in the given directory."""
     times = []
     isofmt = '%Y-%m-%dT%H:%M:%S.%f'
 
@@ -160,32 +160,126 @@ def specs_string(specs):
     return ", ".join(f"{abbreviations.get(key, key)}={value}" for key, value in specs)
 
 
-def plot_all_dataframes(dataframes: dict, title_specs: dict, xlabel: str):
-    """Plots all dataframes in `dataframes`, which is expected to be a dict of
-    `pandas.DataFrame` objects. `title_specs` is used to generate a suffix for
-    the title."""
-    plot_cols = 2 if len(dataframes) >= 2 else 1
-    plot_rows = (len(dataframes) + 1) // 2  # round up
+def _make_axes(n):
+    """Makes and returns handles to `n` axes in subplots."""
+    plot_cols = min(3, n)
+    plot_rows = (n + 2) // 3  # round up
     figsize = (8 * plot_cols, 5 * plot_rows)
     fig, axs = plt.subplots(plot_rows, plot_cols, figsize=figsize, squeeze=False, sharex=True)
     axs = axs.flatten()
+    return axs
 
-    title_suffix = specs_string(title_specs.items())
+
+def plot_all_dataframes(dataframes: dict, title_specs=None, xlabel=None, axs=None, **kwargs):
+    """Plots all dataframes in `dataframes`, which is expected to be a dict of
+    `pandas.DataFrame` objects.
+
+    `title_specs` is used to generate a suffix for the title. `xlabel` is the
+    x-axis label. (The y-axis label is the corresponding key in `dataframes`.)
+    If neither of these arguments are provided, the legend, axis labels and
+    title will not be set.
+
+    If `axs` is provided, it must be a list of `matplotlib.axes.Axes` object,
+    and the plots will be drawn on these axes rather than creating new ones.
+
+    Other keyword arguments (if any) are passed to `dataframe.plot()`.
+    """
+
+    if axs is None:
+        axs = _make_axes(len(dataframes))
+    elif len(axs) < len(dataframes):
+        raise ValueError(f"Not enough axes ({len(axs)}) for {len(dataframes)} series")
+
+    if title_specs:
+        title_suffix = specs_string(title_specs.items())
 
     for ax, (field, dataframe) in zip(axs, dataframes.items()):
-        dataframe.plot(ax=ax)
-        ax.legend()
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel(field)
-        ax.set_title(field + "\n" + title_suffix)
+        ax.set_prop_cycle(None)
+        dataframe.plot(ax=ax, **kwargs)
 
-    return axs
+        if title_specs or xlabel:
+            ax.legend()
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(field)
+            ax.set_title(field + "\n" + title_suffix)
 
 
 # Main plotting functions
 
+def collect_all_training_data(results_dir: Path, fields: list, title_specs: dict,
+                              fixed_specs: dict, series_specs: dict):
+    """Returns a `dict` of `dict`s of `DataFrame` objects, representing all
+    training data relevant to the specifications in `title_specs`, `fixed_specs`
+    and `series_specs`. For example:
+        {
+            (5, 1.0): {
+                'accuracy': <DataFrame object>,
+                'test_loss': <DataFrame object>
+            },
+            (20, 1.0): {
+                'accuracy': <DataFrame object>,
+                'test_loss': <DataFrame object>
+            }
+        }
+
+    The keys of the top-level dict are values corresponding to the
+    specifications in `series_specs`. In the example above, say that
+    `series_specs=['clients', 'noise']` was passed in, then the first item
+    corresponds to 5 clients and a noise level of 1.0.
+
+    The keys of the inner dicts are the field names in `fields`.
+
+    `title_specs`, `fixed_specs` and `series_specs` are as described in
+    `plot_averaged_training_charts()`.
+    """
+    data = {}
+
+    for directory in all_subsubdirectories(results_dir):
+        args = get_args(directory)
+        if not fits_all_specs(args, title_specs, fixed_specs, series_specs, {'cpu', 'repeat'}):
+            continue
+
+        series = tuple(args[key] for key in series_specs.keys())  # identifier for series
+        if series not in data:  # don't use setdefault to avoid generating this every time
+            data[series] = {field: pd.DataFrame() for field in fields}
+
+        training = pd.read_csv(directory / "training.csv")
+        for field in fields:
+            data[series][field][directory] = training[field]
+
+    return data
+
+
+def aggregate_training_chart_data(data: dict, fields: list, series_labels: list, reduce_fn=np.mean):
+    """Returns a dict` mapping the field names in `fields` to `DataFrame`
+    objects containing the (typically) average of that field in the training
+    data in `data`.
+
+    `data` is meant to be a dict
+
+    Most arguments are as described in `plot_averaged_training_charts()`.
+
+    If `reduce` is provided, that is the function used to aggregate training
+    chart data. This will be called with the `axis=1` argument, so it should
+    normally be a numpy function like `np.max` or `np.mean`. By default, the
+    mean is taken.
+    """
+    reduced = {field: pd.DataFrame() for field in fields}
+
+    for series in sorted(data.keys()):  # sort tuples to get sensible series order
+        series_name = specs_string(zip(series_labels, series))
+        sample_size = data[series][fields[0]].shape[1]
+        series_name += f" ({sample_size})"
+
+        for field in fields:
+            reduced[field][series_name] = reduce_fn(data[series][field], axis=1)
+
+    return reduced
+
+
 def plot_averaged_training_charts(results_dir: Path, fields: list, title_specs: dict,
-                                  fixed_specs: dict, series_specs: dict):
+                                  fixed_specs: dict, series_specs: dict, axs=None,
+                                  plot_range=False):
     """Plots training charts (i.e., metrics vs round number) from the results
     in `results_dir`, for each of the metrics specified in `fields`.
 
@@ -206,57 +300,54 @@ def plot_averaged_training_charts(results_dir: Path, fields: list, title_specs: 
     plot those with a noise level of 0.1), such values should be placed in
     `series_specs` as a list of one item.
 
-    Returns handles to the plot axes.
+    If `axs` is provided, it must be a list of `matplotlib.axes.Axes` object,
+    and the plots will be drawn on these axes rather than creating new ones.
+
+    If `plot_range` is True, it also plots the minimum and maximum for each
+    series on the same plot. This can get messy, so don't do this if you have a
+    lot of series.
     """
 
     # General strategy: Step through each directory, and for each one:
     #  - check that fixed specs match
     #  - determine which series it belongs to based on series specs
     #  - add it to a DataFrame for that series
-    # then at the end, take the averages for each DataFrame, and put it in an overall DataFrame.
-    # We actually do this for each metric in `fields`, so we track dicts of {field-name: DataFrame}.
+    # then at the end, take the averages for each DataFrame, and put it in an
+    # overall DataFrame. We actually do this for each metric in `fields`, so we
+    # track dicts of {field-name: DataFrame}.
 
-    data = {}
+    data = collect_all_training_data(results_dir, fields, title_specs, fixed_specs, series_specs)
+    averages = aggregate_training_chart_data(data, fields, series_specs.keys())
+    if axs is None:
+        axs = _make_axes(len(fields))
+    plot_all_dataframes(averages, title_specs, "round", axs=axs)
 
-    for directory in all_subsubdirectories(results_dir):
-        args = get_args(directory)
-        if not fits_all_specs(args, title_specs, fixed_specs, series_specs, {'cpu', 'repeat'}):
-            continue
-
-        series = tuple(args[key] for key in series_specs.keys())  # identifier for series
-        if series not in data:  # don't use setdefault to avoid generating this every time
-            data[series] = {field: pd.DataFrame() for field in fields}
-
-        training = pd.read_csv(directory / "training.csv")
-        for field in fields:
-            data[series][field][directory] = training[field]
-
-    reduced = {field: pd.DataFrame() for field in fields}
-
-    # Take averages and put them in new DataFrames
-    for series in sorted(data.keys()):  # sort tuples to get sensible series order
-        series_name = specs_string(zip(series_specs, series))
-        sample_size = data[series][field].shape[1]
-        series_name += f" ({sample_size})"
-        for field in fields:
-            reduced[field][series_name] = data[series][field].mean(axis=1)
-
-    return plot_all_dataframes(reduced, title_specs, "round")
+    if plot_range:
+        minima = aggregate_training_chart_data(data, fields, series_specs.keys(), reduce_fn=np.min)
+        maxima = aggregate_training_chart_data(data, fields, series_specs.keys(), reduce_fn=np.max)
+        plot_all_dataframes(minima, axs=axs, linewidth=0.5, legend=False)
+        plot_all_dataframes(maxima, axs=axs, linewidth=0.5, legend=False)
 
 
 # function that plots final accuracy vs number of clients, but averaged over many iterations
 
 def plot_evaluation_vs_clients(results_dir: Path, fields: list, title_specs: dict,
-                               fixed_specs: dict, series_specs: dict):
-    """Plots metric vs number of clients from the results in `results_dir`, for each of
-    the metrics specified in `fields`.
+                               fixed_specs: dict, series_specs: dict, axs=None):
+    """Plots metric vs number of clients from the results in `results_dir`, for
+    each of the metrics specified in `fields`.
 
-    The `title_specs`, `fixed_specs` and `series_specs` arguments are the same as in
-    `plot_averaged_training_charts()` above."""
+    The `title_specs`, `fixed_specs` and `series_specs` arguments are the same
+    as in `plot_averaged_training_charts()` above.
 
-    # Similar strategy to plot_averaged_training_charts; there's actually some amount of nonideal
-    # code duplication. The main difference is that here we're collecting and averaging for each
-    # point, not on a per-series basis.
+    If `axs` is provided, it must be a list of `matplotlib.axes.Axes` object,
+    and the plots will be drawn on these axes rather than creating new ones.
+    """
+
+    # Similar strategy to plot_averaged_training_charts; there's actually some
+    # amount of nonideal code duplication. The main difference is that here
+    # we're collecting and averaging for each point, not on a per-series basis.
+    # This makes the data structures quite different, so it's not easily
+    # deduplicable.
 
     clients_range = range(2, 31)
     data = {}
@@ -285,4 +376,4 @@ def plot_evaluation_vs_clients(results_dir: Path, fields: list, title_specs: dic
                 samples = np.array(data[series][(field, c)])
                 reduced[field].loc[c, series_name] = samples.mean()
 
-    return plot_all_dataframes(reduced, title_specs, "number of clients")
+    plot_all_dataframes(reduced, title_specs, "number of clients", axs=axs)
