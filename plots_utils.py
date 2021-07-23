@@ -45,7 +45,14 @@ def get_args_file(directory):
 
 def get_args(directory):
     """`directory` must be a pathlib.Path object."""
-    return get_args_file(directory)['args']
+    args = get_args_file(directory)['args']
+
+    # Ignore the 'save_models' parameter, because it doesn't affect the plots
+    # and it was added later, so older results don't have it.
+    if 'save_models' in args:
+        del args['save_models']
+
+    return args
 
 
 def get_eval(directory):
@@ -172,7 +179,7 @@ def specs_string(specs):
     return ", ".join(f"{abbreviations.get(key, key)}={value}" for key, value in specs)
 
 
-def _make_axes(n):
+def make_axes(n):
     """Makes and returns handles to `n` axes in subplots."""
     plot_cols = min(3, n)
     plot_rows = (n + 2) // 3  # round up
@@ -198,7 +205,7 @@ def plot_all_dataframes(dataframes: dict, title_specs=None, xlabel=None, axs=Non
     """
 
     if axs is None:
-        axs = _make_axes(len(dataframes))
+        axs = make_axes(len(dataframes))
     elif len(axs) < len(dataframes):
         raise ValueError(f"Not enough axes ({len(axs)}) for {len(dataframes)} series")
 
@@ -331,7 +338,7 @@ def plot_averaged_training_charts(results_dir: Path, fields: list, title_specs: 
     data = collect_all_training_data(results_dir, fields, title_specs, fixed_specs, series_specs)
     averages = aggregate_training_chart_data(data, fields, series_specs.keys())
     if axs is None:
-        axs = _make_axes(len(fields))
+        axs = make_axes(len(fields))
     plot_all_dataframes(averages, title_specs, "round", axs=axs)
 
     if plot_range:
