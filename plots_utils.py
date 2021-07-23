@@ -7,6 +7,7 @@
 
 import datetime
 import json
+import warnings
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -30,6 +31,7 @@ abbreviations = {
     'power_update_period': 'pup',
     'power_quantile': 'pq',
     'power_factor': 'pf',
+    'rounding_method': 'rdm',
 }
 
 
@@ -58,7 +60,7 @@ def fits_spec(args, specs):
     """Returns True if the given `args` dict matches the given `specs` dict,
     for those entries in `specs`."""
     for key, value in specs.items():
-        arg = args[key]
+        arg = args.get(key, "__missing__")
         if value == "__all__":  # magic value
             matches = True
         elif isinstance(value, list):
@@ -93,8 +95,14 @@ def show_timestamp_info(results_dir):
     for directory in all_subsubdirectories(results_dir):
         started_str = get_args_file(directory)['started']
         started = datetime.datetime.strptime(started_str, isofmt)
-        finished_str = get_eval(directory)['finished']
+        try:
+            finished_str = get_eval(directory)['finished']
+        except FileNotFoundError:
+            warnings.warn(f"No evaluation.json file in {directory}")
+            continue
         finished = datetime.datetime.strptime(finished_str, isofmt)
+        if finished < started:
+            warnings.warn(f"Finished before it started: {directory}")
         times.append((started, finished))
 
     times_of_interest = {  # ((start, finish), column_to_bold)
@@ -146,9 +154,13 @@ def fits_all_specs(args, title_specs, fixed_specs, series_specs, ignore_specs):
     `series_specs`, and False if not.
     """
     found_args = set(args.keys()) - ignore_specs
+    optional_args = {key for key, value in fixed_specs.items()
+                     if isinstance(value, list) and '__missing__' in value}
     specified_args = (set(title_specs) | set(fixed_specs) | set(series_specs)) - ignore_specs
-    assert found_args <= specified_args, "found but not specified: " + str(found_args - specified_args)
-    assert specified_args <= found_args, "specified but not found: " + str(specified_args - found_args)
+    if found_args > specified_args:
+        raise AssertionError("found but not specified: " + str(found_args - specified_args))
+    if specified_args - optional_args > found_args:
+        raise AssertionError("specified but not found: " + str(specified_args - found_args))
     assert fits_spec(args, fixed_specs), str(args)
     return fits_spec(args, title_specs) and fits_spec(args, series_specs)
 
