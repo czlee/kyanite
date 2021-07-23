@@ -5,12 +5,14 @@
 # Chuan-Zheng Lee <czlee@stanford.edu>
 # July 2021
 
+import datetime
 import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from IPython.display import display, Markdown
 
 
 # Helper functions
@@ -31,12 +33,17 @@ abbreviations = {
 }
 
 
-def get_args(directory):
+def get_args_file(directory):
     """`directory` must be a pathlib.Path object."""
     argsfile = directory / 'arguments.json'
     with open(argsfile) as f:
         content = json.load(f)
-    return content['args']
+    return content
+
+
+def get_args(directory):
+    """`directory` must be a pathlib.Path object."""
+    return get_args_file(directory)['args']
 
 
 def get_eval(directory):
@@ -63,8 +70,54 @@ def fits_spec(args, specs):
     return True
 
 
-def all_subdirectories(results_dir):
-    """Returns a list with all subdirectories in `results_dir`.
+def _duration_str(times):
+    start, finish = times
+    duration = finish - start
+    hours, remainder = divmod(duration.seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if duration.days > 0:
+        return f"{duration.days} days, {hours:02} h {minutes:02} min {seconds:02} s"
+    elif hours > 0:
+        return f"{hours} h {minutes:02} min {seconds:02} s"
+    elif minutes > 0:
+        return f"{minutes} min {seconds:02} s"
+    else:
+        return f"{seconds} s"
+
+
+def show_start_times(results_dir):
+    """Prints the start times of the earliest and latest experiments in the given directory."""
+    times = []
+    isofmt = '%Y-%m-%dT%H:%M:%S.%f'
+
+    for directory in all_subsubdirectories(results_dir):
+        started_str = get_args_file(directory)['started']
+        started = datetime.datetime.strptime(started_str, isofmt)
+        finished_str = get_eval(directory)['finished']
+        finished = datetime.datetime.strptime(finished_str, isofmt)
+        times.append((started, finished))
+
+    times_of_interest = {  # ((start, finish), column_to_bold)
+        'first to start': (min(times), 1),
+        'last to finish': (max(times, key=lambda x: (x[1], x[0])), 2),
+        'shortest': (min(times, key=lambda x: x[1] - x[0]), 3),
+        'longest': (max(times, key=lambda x: x[1] - x[0]), 3),
+    }
+
+    printout = "| experiments in this directory | started at | finished at | duration |\n"
+    printout += "|--:|:-:|:-:|--:|\n"
+    fmt = '%d %b %Y, %H:%M:%S'
+    for name, (times, column_to_bold) in times_of_interest.items():
+        cells = [name, times[0].strftime(fmt), times[1].strftime(fmt), _duration_str(times)]
+        cells[column_to_bold] = "**" + cells[column_to_bold] + "**"
+        printout += "| " + " | ".join(cells) + " |\n"
+
+    display(Markdown(printout))
+
+
+def all_subsubdirectories(results_dir):
+    """Returns a list with all subsubdirectories in `results_dir`, as in, all
+    directories two levels down.
 
     `results_dir` should be either a `pathlib.Path` or a list of `pathlib.Path`s.
     In the latter case, the generator goes through each directory in the list in
@@ -77,23 +130,27 @@ def all_subdirectories(results_dir):
                    for rd in results_dir
                    for d in rd.iterdir() if d.is_dir()
                    for e in d.iterdir() if e.is_dir()]
+
+    # older directories are not necessarily composite
+    if len(directories) == 0:
+        directories = [d for rd in results_dir for d in rd.iterdir() if d.is_dir()]
+
     return directories
 
 
 def fits_all_specs(args, title_specs, fixed_specs, series_specs, ignore_specs):
     """Checks if the `args` satisfy all of the `specs`. An assertion fails if:
      - any argument key is not found in the specs or vice versa
-     - the arguments do not fit the `title_specs` or `fixed_specs`
+     - the arguments do not fit `fixed_specs`
     If the assertions do not fail, then this returns True if the `args` satisfy
     `series_specs`, and False if not.
     """
-    found_args = set(args.keys())
-    specified_args = set(title_specs) | set(fixed_specs) | set(series_specs) | ignore_specs
+    found_args = set(args.keys()) - ignore_specs
+    specified_args = (set(title_specs) | set(fixed_specs) | set(series_specs)) - ignore_specs
     assert found_args <= specified_args, "found but not specified: " + str(found_args - specified_args)
     assert specified_args <= found_args, "specified but not found: " + str(specified_args - found_args)
-    assert fits_spec(args, fixed_specs)
-    assert fits_spec(args, title_specs)
-    return fits_spec(args, series_specs)
+    assert fits_spec(args, fixed_specs), str(args)
+    return fits_spec(args, title_specs) and fits_spec(args, series_specs)
 
 
 def specs_string(specs):
@@ -122,26 +179,34 @@ def plot_all_dataframes(dataframes: dict, title_specs: dict, xlabel: str):
         ax.set_ylabel(field)
         ax.set_title(field + "\n" + title_suffix)
 
+    return axs
+
 
 # Main plotting functions
 
 def plot_averaged_training_charts(results_dir: Path, fields: list, title_specs: dict,
-                                  fixed_specs: dict, series_specs: dict, retval=False):
+                                  fixed_specs: dict, series_specs: dict):
     """Plots training charts (i.e., metrics vs round number) from the results
     in `results_dir`, for each of the metrics specified in `fields`.
 
-    `title_specs` and `fixed_specs` are dicts indicating arguments that should always
-    match (an assertion fails if any do not match). `series_spec` is a similar dict,
-    but the values should be lists or the special string `"__all__"`, and this dict is
-    used to differentiate between series.
+    `fixed_specs` is a dict indicating arguments that should always match (an
+    assertion fails if any do not match).
 
-    All arguments must be in one of the three `specs` dicts. This is to protect against
-    accidentally averaging mismatched data. An assertion fails if an argument is found
-    in the results directories that is not in any of these dicts. If you want to skip
-    certain values of an argument (e.g., only plot those with a noise level of 0.1),
-    such values should be placed in `series_specs` as a list of one item.
+    `title_specs` is a similar dict, but matching is not mandatory (it skips
+    non-matching directories) and this dict is used to generate thetitle.
 
-    If `retval` is true, the data from which the plots are generated is returned.
+    `series_spec` is a similar dict, but the values should be lists or the
+    special string `"__all__"`, and this dict is used to differentiate between
+    series.
+
+    All arguments must be in at least one of the three `specs` dicts. This is to
+    protect against accidentally averaging mismatched data. An assertion fails
+    if an argument is found in the results directories that is not in any of
+    these dicts. If you want to skip certain values of an argument (e.g., only
+    plot those with a noise level of 0.1), such values should be placed in
+    `series_specs` as a list of one item.
+
+    Returns handles to the plot axes.
     """
 
     # General strategy: Step through each directory, and for each one:
@@ -153,7 +218,7 @@ def plot_averaged_training_charts(results_dir: Path, fields: list, title_specs: 
 
     data = {}
 
-    for directory in all_subdirectories(results_dir):
+    for directory in all_subsubdirectories(results_dir):
         args = get_args(directory)
         if not fits_all_specs(args, title_specs, fixed_specs, series_specs, {'cpu', 'repeat'}):
             continue
@@ -176,15 +241,13 @@ def plot_averaged_training_charts(results_dir: Path, fields: list, title_specs: 
         for field in fields:
             reduced[field][series_name] = data[series][field].mean(axis=1)
 
-    plot_all_dataframes(reduced, title_specs, "round")
-    if retval:
-        return reduced
+    return plot_all_dataframes(reduced, title_specs, "round")
 
 
 # function that plots final accuracy vs number of clients, but averaged over many iterations
 
 def plot_evaluation_vs_clients(results_dir: Path, fields: list, title_specs: dict,
-                               fixed_specs: dict, series_specs: dict, retval=False):
+                               fixed_specs: dict, series_specs: dict):
     """Plots metric vs number of clients from the results in `results_dir`, for each of
     the metrics specified in `fields`.
 
@@ -199,7 +262,7 @@ def plot_evaluation_vs_clients(results_dir: Path, fields: list, title_specs: dic
     data = {}
     ignore_specs = {'cpu', 'repeat', 'clients'}
 
-    for directory in all_subdirectories(results_dir):
+    for directory in all_subsubdirectories(results_dir):
         args = get_args(directory)
         if not fits_all_specs(args, title_specs, fixed_specs, series_specs, ignore_specs):
             continue
@@ -222,6 +285,4 @@ def plot_evaluation_vs_clients(results_dir: Path, fields: list, title_specs: dic
                 samples = np.array(data[series][(field, c)])
                 reduced[field].loc[c, series_name] = samples.mean()
 
-    plot_all_dataframes(reduced, title_specs, "number of clients")
-    if retval:
-        return reduced
+    return plot_all_dataframes(reduced, title_specs, "number of clients")
