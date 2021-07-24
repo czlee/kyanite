@@ -52,6 +52,12 @@ def get_args(directory):
     if 'save_models' in args:
         del args['save_models']
 
+    # We removed the --small argument when adding support for other datasets,
+    # if the option is there, replace it with the new option.
+    if 'small' in args:
+        args['dataset'] = 'epsilon-small' if args['small'] else 'epsilon'
+        del args['small']
+
     return args
 
 
