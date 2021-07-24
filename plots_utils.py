@@ -32,6 +32,8 @@ abbreviations = {
     'power_quantile': 'pq',
     'power_factor': 'pf',
     'rounding_method': 'rdm',
+    'lr_client': 'lr',
+    'momentum_client': 'mom',
 }
 
 
@@ -47,16 +49,23 @@ def get_args(directory):
     """`directory` must be a pathlib.Path object."""
     args = get_args_file(directory)['args']
 
-    # Ignore the 'save_models' parameter, because it doesn't affect the plots
-    # and it was added later, so older results don't have it.
+    # Ignore parameters that don't affect plots
     if 'save_models' in args:
         del args['save_models']
+    if 'cpu' in args:
+        del args['cpu']
+    if 'repeat' in args:
+        del args['repeat']
 
     # We removed the --small argument when adding support for other datasets,
     # if the option is there, replace it with the new option.
     if 'small' in args:
         args['dataset'] = 'epsilon-small' if args['small'] else 'epsilon'
         del args['small']
+
+    # We added the --momentum-client argument late too.
+    if 'momentum_client' not in args:
+        args['momentum_client'] = 0.0
 
     return args
 
@@ -159,7 +168,7 @@ def all_subsubdirectories(results_dir):
     return directories
 
 
-def fits_all_specs(args, title_specs, fixed_specs, series_specs, ignore_specs):
+def fits_all_specs(args, title_specs, fixed_specs, series_specs, ignore_specs=set()):
     """Checks if the `args` satisfy all of the `specs`. An assertion fails if:
      - any argument key is not found in the specs or vice versa
      - the arguments do not fit `fixed_specs`
@@ -261,7 +270,7 @@ def collect_all_training_data(results_dir: Path, fields: list, title_specs: dict
 
     for directory in all_subsubdirectories(results_dir):
         args = get_args(directory)
-        if not fits_all_specs(args, title_specs, fixed_specs, series_specs, {'cpu', 'repeat'}):
+        if not fits_all_specs(args, title_specs, fixed_specs, series_specs):
             continue
 
         series = tuple(args[key] for key in series_specs.keys())  # identifier for series
@@ -376,11 +385,9 @@ def plot_evaluation_vs_clients(results_dir: Path, fields: list, title_specs: dic
 
     clients_range = range(2, 31)
     data = {}
-    ignore_specs = {'cpu', 'repeat', 'clients'}
-
     for directory in all_subsubdirectories(results_dir):
         args = get_args(directory)
-        if not fits_all_specs(args, title_specs, fixed_specs, series_specs, ignore_specs):
+        if not fits_all_specs(args, title_specs, fixed_specs, series_specs, {'clients'}):
             continue
 
         series = tuple(args[key] for key in series_specs.keys())  # identifier for series
@@ -402,3 +409,34 @@ def plot_evaluation_vs_clients(results_dir: Path, fields: list, title_specs: dic
                 reduced[field].loc[c, series_name] = samples.mean()
 
     plot_all_dataframes(reduced, title_specs, "number of clients", axs=axs)
+
+
+# function that plots analog vs digital plots
+
+def plot_comparison(field, analog_path, digital_path, all_analog_specs, all_digital_specs):
+    """Plots analog and digital (or any other two otherwise incompatible
+    collections of series) on the same plot.
+
+    `all_analog_specs` and `all_digital_specs` should both be 3-tuples
+        (title_specs, fixed_specs, series_specs)
+    """
+
+    plt.figure(figsize=(8, 5))
+    ax = plt.axes()
+
+    series_specs = all_analog_specs[2]
+    analog_data = collect_all_training_data(analog_path, [field], *all_analog_specs)
+    analog_averages = aggregate_training_chart_data(analog_data, [field], series_specs.keys())[field]
+
+    title_specs, _, series_specs = all_digital_specs
+    digital_data = collect_all_training_data(digital_path, [field], *all_digital_specs)
+    digital_averages = aggregate_training_chart_data(digital_data, [field], series_specs.keys())[field]
+
+    all_averages = analog_averages.join(digital_averages, lsuffix=' analog', rsuffix=' digital')
+    all_averages.plot(ax=ax)
+
+    title = "analog vs digital\n" + specs_string(title_specs.items())
+    plt.title(title)
+    plt.xlabel("round")
+    plt.ylabel(field)
+    plt.legend(bbox_to_anchor=(1, 1), loc='upper left')
