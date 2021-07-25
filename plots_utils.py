@@ -325,7 +325,8 @@ def aggregate_training_chart_data(data: dict, fields: list, series_labels: list,
 
 def plot_averaged_training_charts(results_dir: Path, fields: list, title_specs: dict,
                                   fixed_specs: dict, series_specs: dict, axs=None,
-                                  plot_range=False, nolabel=False, **kwargs):
+                                  plot_range=False, plot_quartiles=False, nolabel=False,
+                                  **kwargs):
     """Plots training charts (i.e., metrics vs round number) from the results
     in `results_dir`, for each of the metrics specified in `fields`.
 
@@ -373,11 +374,16 @@ def plot_averaged_training_charts(results_dir: Path, fields: list, title_specs: 
         axs = make_axes(len(fields))
     plot_all_dataframes(averages, title_specs, "round", axs=axs, nolabel=nolabel, **kwargs)
 
+    def plot_reduction(reduce_fn, linewidth):
+        reduced = aggregate_training_chart_data(data, fields, series_specs.keys(), reduce_fn=reduce_fn)
+        plot_all_dataframes(reduced, axs=axs, linewidth=linewidth, nolabel=True, **kwargs)
+
     if plot_range:
-        minima = aggregate_training_chart_data(data, fields, series_specs.keys(), reduce_fn=np.min)
-        maxima = aggregate_training_chart_data(data, fields, series_specs.keys(), reduce_fn=np.max)
-        plot_all_dataframes(minima, axs=axs, linewidth=0.5, nolabel=True, **kwargs)
-        plot_all_dataframes(maxima, axs=axs, linewidth=0.5, nolabel=True, **kwargs)
+        plot_reduction(np.min, 0.5)
+        plot_reduction(np.max, 0.5)
+    if plot_quartiles:
+        plot_reduction(lambda a, **kwargs: np.quantile(a, 0.25, **kwargs), 1)
+        plot_reduction(lambda a, **kwargs: np.quantile(a, 0.75, **kwargs), 1)
 
 
 # function that plots final accuracy vs number of clients, but averaged over many iterations
@@ -431,7 +437,7 @@ def plot_evaluation_vs_clients(results_dir: Path, fields: list, title_specs: dic
 # function that plots analog vs digital plots
 
 def plot_comparison(field, analog_path, digital_path, all_analog_specs, all_digital_specs,
-                    plot_range=False, **kwargs):
+                    plot_range=False, plot_quartiles=False, **kwargs):
 
     plt.figure(figsize=(8, 5))
     ax = plt.axes()
@@ -454,15 +460,18 @@ def plot_comparison(field, analog_path, digital_path, all_analog_specs, all_digi
     plot_all_dataframes(digital_averages, title_specs, "round", axs=[ax], nolabel=True,
         linestyle=digital_linestyle, **kwargs)
 
+    def plot_reduction(reduce_fn, linewidth):
+        analog_reduced = aggregate_training_chart_data(analog_data, [field], analog_series_specs.keys(), reduce_fn=reduce_fn)  # noqa: E501
+        plot_all_dataframes(analog_reduced, axs=[ax], linewidth=linewidth, nolabel=True, **kwargs)
+        digital_reduced = aggregate_training_chart_data(digital_data, [field], digital_series_specs.keys(), reduce_fn=reduce_fn)  # noqa: E501
+        plot_all_dataframes(digital_reduced, axs=[ax], linewidth=linewidth, nolabel=True, linestyle=digital_linestyle, **kwargs)  # noqa: E501
+
     if plot_range:
-        analog_minima = aggregate_training_chart_data(analog_data, [field], analog_series_specs.keys(), reduce_fn=np.min)  # noqa: E501
-        analog_maxima = aggregate_training_chart_data(analog_data, [field], analog_series_specs.keys(), reduce_fn=np.max)  # noqa: E501
-        plot_all_dataframes(analog_minima, axs=[ax], linewidth=0.5, nolabel=True, **kwargs)
-        plot_all_dataframes(analog_maxima, axs=[ax], linewidth=0.5, nolabel=True, **kwargs)
-        digital_minima = aggregate_training_chart_data(digital_data, [field], digital_series_specs.keys(), reduce_fn=np.min)  # noqa: E501
-        digital_maxima = aggregate_training_chart_data(digital_data, [field], digital_series_specs.keys(), reduce_fn=np.max)  # noqa: E501
-        plot_all_dataframes(digital_minima, axs=[ax], linewidth=0.5, nolabel=True, linestyle=digital_linestyle, **kwargs)  # noqa: E501
-        plot_all_dataframes(digital_maxima, axs=[ax], linewidth=0.5, nolabel=True, linestyle=digital_linestyle, **kwargs)  # noqa: E501
+        plot_reduction(np.min, 0.5)
+        plot_reduction(np.max, 0.5)
+    if plot_quartiles:
+        plot_reduction(lambda a, **kwargs: np.quantile(a, 0.25, **kwargs), 1)
+        plot_reduction(lambda a, **kwargs: np.quantile(a, 0.75, **kwargs), 1)
 
     # add line type indicators for analog and digital
     x, y = ax.get_children()[0].get_data()
