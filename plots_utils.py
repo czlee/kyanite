@@ -466,8 +466,8 @@ def plot_comparison(field, analog_path, digital_path, all_analog_specs, all_digi
 
     # add line type indicators for analog and digital
     x, y = ax.get_children()[0].get_data()
-    ax.plot([x[0]], [y[0]], color='k', label="analog")
-    ax.plot([x[0]], [y[0]], color='k', linestyle=digital_linestyle, label="digital")
+    ax.plot([x[0]], [y[0]], color='k', label="analog", **kwargs)
+    ax.plot([x[0]], [y[0]], color='k', linestyle=digital_linestyle, label="digital", **kwargs)
     ax.legend()
 
     title = "analog vs digital\n" + specs_string(title_specs.items())
