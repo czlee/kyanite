@@ -204,7 +204,8 @@ def make_axes(n):
     return axs
 
 
-def plot_all_dataframes(dataframes: dict, title_specs=None, xlabel=None, axs=None, **kwargs):
+def plot_all_dataframes(dataframes: dict, title_specs=None, xlabel=None, axs=None,
+                        nolabel=False, **kwargs):
     """Plots all dataframes in `dataframes`, which is expected to be a dict of
     `pandas.DataFrame` objects.
 
@@ -215,6 +216,9 @@ def plot_all_dataframes(dataframes: dict, title_specs=None, xlabel=None, axs=Non
 
     If `axs` is provided, it must be a list of `matplotlib.axes.Axes` object,
     and the plots will be drawn on these axes rather than creating new ones.
+
+    If `nolabel` is True, it assigns no label to the plot series (so it won't
+    appear in the legend).
 
     Other keyword arguments (if any) are passed to `dataframe.plot()`.
     """
@@ -229,12 +233,21 @@ def plot_all_dataframes(dataframes: dict, title_specs=None, xlabel=None, axs=Non
 
     for ax, (field, dataframe) in zip(axs, dataframes.items()):
         ax.set_prop_cycle(None)
-        dataframe.plot(ax=ax, **kwargs)
 
-        if title_specs or xlabel:
-            ax.legend()
+        for name, series in dataframe.iteritems():
+            if nolabel:
+                label = ''
+            elif 'sample_size' in series.attrs:
+                label = f"{name} ({series.attrs['sample_size']})"
+            else:
+                label = name
+            series.plot(ax=ax, label=label, **kwargs)
+
+        ax.legend()
+        ax.set_ylabel(field)
+        if xlabel:
             ax.set_xlabel(xlabel)
-            ax.set_ylabel(field)
+        if title_specs:
             ax.set_title(field + "\n" + title_suffix)
 
 
@@ -303,17 +316,16 @@ def aggregate_training_chart_data(data: dict, fields: list, series_labels: list,
     for series in sorted(data.keys()):  # sort tuples to get sensible series order
         series_name = specs_string(zip(series_labels, series))
         sample_size = data[series][fields[0]].shape[1]
-        series_name += f" ({sample_size})"
-
         for field in fields:
             reduced[field][series_name] = reduce_fn(data[series][field], axis=1)
+            reduced[field][series_name].attrs['sample_size'] = sample_size
 
     return reduced
 
 
 def plot_averaged_training_charts(results_dir: Path, fields: list, title_specs: dict,
                                   fixed_specs: dict, series_specs: dict, axs=None,
-                                  plot_range=False):
+                                  plot_range=False, nolabel=False, **kwargs):
     """Plots training charts (i.e., metrics vs round number) from the results
     in `results_dir`, for each of the metrics specified in `fields`.
 
@@ -340,6 +352,11 @@ def plot_averaged_training_charts(results_dir: Path, fields: list, title_specs: 
     If `plot_range` is True, it also plots the minimum and maximum for each
     series on the same plot. This can get messy, so don't do this if you have a
     lot of series.
+
+    If `nolabel` is True, it assigns no label to the main plot series (so it
+    won't appear in the legend).
+
+    Other keyword arguments are passed through to the `DataFrame.plot()` function.
     """
 
     # General strategy: Step through each directory, and for each one:
@@ -354,13 +371,13 @@ def plot_averaged_training_charts(results_dir: Path, fields: list, title_specs: 
     averages = aggregate_training_chart_data(data, fields, series_specs.keys())
     if axs is None:
         axs = make_axes(len(fields))
-    plot_all_dataframes(averages, title_specs, "round", axs=axs)
+    plot_all_dataframes(averages, title_specs, "round", axs=axs, nolabel=nolabel, **kwargs)
 
     if plot_range:
         minima = aggregate_training_chart_data(data, fields, series_specs.keys(), reduce_fn=np.min)
         maxima = aggregate_training_chart_data(data, fields, series_specs.keys(), reduce_fn=np.max)
-        plot_all_dataframes(minima, axs=axs, linewidth=0.5, legend=False)
-        plot_all_dataframes(maxima, axs=axs, linewidth=0.5, legend=False)
+        plot_all_dataframes(minima, axs=axs, linewidth=0.5, nolabel=True, **kwargs)
+        plot_all_dataframes(maxima, axs=axs, linewidth=0.5, nolabel=True, **kwargs)
 
 
 # function that plots final accuracy vs number of clients, but averaged over many iterations
@@ -413,30 +430,47 @@ def plot_evaluation_vs_clients(results_dir: Path, fields: list, title_specs: dic
 
 # function that plots analog vs digital plots
 
-def plot_comparison(field, analog_path, digital_path, all_analog_specs, all_digital_specs):
-    """Plots analog and digital (or any other two otherwise incompatible
-    collections of series) on the same plot.
-
-    `all_analog_specs` and `all_digital_specs` should both be 3-tuples
-        (title_specs, fixed_specs, series_specs)
-    """
+def plot_comparison(field, analog_path, digital_path, all_analog_specs, all_digital_specs,
+                    plot_range=False, **kwargs):
 
     plt.figure(figsize=(8, 5))
     ax = plt.axes()
 
-    series_specs = all_analog_specs[2]
+    analog_series_specs = all_analog_specs[2]
+    title_specs, _, digital_series_specs = all_digital_specs
+    digital_linestyle = (0, (4, 2, 1, 2))
+
     analog_data = collect_all_training_data(analog_path, [field], *all_analog_specs)
-    analog_averages = aggregate_training_chart_data(analog_data, [field], series_specs.keys())[field]
-
-    title_specs, _, series_specs = all_digital_specs
     digital_data = collect_all_training_data(digital_path, [field], *all_digital_specs)
-    digital_averages = aggregate_training_chart_data(digital_data, [field], series_specs.keys())[field]
 
-    all_averages = analog_averages.join(digital_averages, lsuffix=' analog', rsuffix=' digital')
-    all_averages.plot(ax=ax)
+    analog_averages = aggregate_training_chart_data(analog_data, [field], analog_series_specs.keys())
+    digital_averages = aggregate_training_chart_data(digital_data, [field], digital_series_specs.keys())
+
+    # modify the sample sizes to have both analog and digital
+    for (_, analog), (_, digital) in zip(analog_averages[field].items(), digital_averages[field].items()):  # noqa: E501
+        analog.attrs['sample_size'] = f"{analog.attrs['sample_size']} / {digital.attrs['sample_size']}"
+
+    plot_all_dataframes(analog_averages, title_specs, "round", axs=[ax], **kwargs)
+    plot_all_dataframes(digital_averages, title_specs, "round", axs=[ax], nolabel=True,
+        linestyle=digital_linestyle, **kwargs)
+
+    if plot_range:
+        analog_minima = aggregate_training_chart_data(analog_data, [field], analog_series_specs.keys(), reduce_fn=np.min)  # noqa: E501
+        analog_maxima = aggregate_training_chart_data(analog_data, [field], analog_series_specs.keys(), reduce_fn=np.max)  # noqa: E501
+        plot_all_dataframes(analog_minima, axs=[ax], linewidth=0.5, nolabel=True, **kwargs)
+        plot_all_dataframes(analog_maxima, axs=[ax], linewidth=0.5, nolabel=True, **kwargs)
+        digital_minima = aggregate_training_chart_data(digital_data, [field], digital_series_specs.keys(), reduce_fn=np.min)  # noqa: E501
+        digital_maxima = aggregate_training_chart_data(digital_data, [field], digital_series_specs.keys(), reduce_fn=np.max)  # noqa: E501
+        plot_all_dataframes(digital_minima, axs=[ax], linewidth=0.5, nolabel=True, linestyle=digital_linestyle, **kwargs)  # noqa: E501
+        plot_all_dataframes(digital_maxima, axs=[ax], linewidth=0.5, nolabel=True, linestyle=digital_linestyle, **kwargs)  # noqa: E501
+
+    # add line type indicators for analog and digital
+    x, y = ax.get_children()[0].get_data()
+    ax.plot([x[0]], [y[0]], color='k', label="analog")
+    ax.plot([x[0]], [y[0]], color='k', linestyle=digital_linestyle, label="digital")
+    ax.legend()
 
     title = "analog vs digital\n" + specs_string(title_specs.items())
-    plt.title(title)
-    plt.xlabel("round")
-    plt.ylabel(field)
-    plt.legend(bbox_to_anchor=(1, 1), loc='upper left')
+    ax.set_title(title)
+    ax.set_xlabel("round")
+    ax.set_ylabel(field)
