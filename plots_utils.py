@@ -34,6 +34,7 @@ abbreviations = {
     'rounding_method': 'rdm',
     'lr_client': 'lr',
     'momentum_client': 'mom',
+    'parameter_schedule': 'paramsch',
 }
 
 
@@ -437,10 +438,11 @@ def plot_evaluation_vs_clients(results_dir: Path, fields: list, title_specs: dic
 # function that plots analog vs digital plots
 
 def plot_comparison(field, analog_path, digital_path, all_analog_specs, all_digital_specs,
-                    plot_range=False, plot_quartiles=False, **kwargs):
+                    plot_range=False, plot_quartiles=False, ax=None, **kwargs):
 
-    plt.figure(figsize=(8, 5))
-    ax = plt.axes()
+    if ax is None:
+        plt.figure(figsize=(8, 5))
+        ax = plt.axes()
 
     analog_series_specs = all_analog_specs[2]
     title_specs, _, digital_series_specs = all_digital_specs
