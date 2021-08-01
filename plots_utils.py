@@ -83,8 +83,8 @@ def fits_spec(args, specs):
     """Returns True if the given `args` dict matches the given `specs` dict,
     for those entries in `specs`."""
     for key, value in specs.items():
-        arg = args.get(key, "__missing__")
-        if value == "__all__":  # magic value
+        arg = args.get(key, "__missing__")  # magic default
+        if value == "__all__":              # magic value
             matches = True
         elif isinstance(value, list):
             matches = arg in value
@@ -174,7 +174,7 @@ def fits_all_specs(args, title_specs, fixed_specs, series_specs, ignore_specs=se
      - any argument key is not found in the specs or vice versa
      - the arguments do not fit `fixed_specs`
     If the assertions do not fail, then this returns True if the `args` satisfy
-    `series_specs`, and False if not.
+    `title_specs` and `series_specs`, and False if not.
     """
     found_args = set(args.keys()) - ignore_specs
     optional_args = {key for key, value in fixed_specs.items()
