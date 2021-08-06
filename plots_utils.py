@@ -180,11 +180,16 @@ def fits_all_specs(args, title_specs, fixed_specs, series_specs, ignore_specs=se
     optional_args = {key for key, value in fixed_specs.items()
                      if isinstance(value, list) and '__missing__' in value}
     specified_args = (set(title_specs) | set(fixed_specs) | set(series_specs)) - ignore_specs
-    if found_args > specified_args:
+    if not (found_args <= specified_args):
         raise AssertionError("found but not specified: " + str(found_args - specified_args))
-    if specified_args - optional_args > found_args:
-        raise AssertionError("specified but not found: " + str(specified_args - found_args))
-    assert fits_spec(args, fixed_specs), str(args)
+    if not (specified_args - optional_args <= found_args):
+        not_found_args = specified_args - optional_args - found_args
+        raise AssertionError("specified but not found: " + str(not_found_args))
+    if not fits_spec(args, fixed_specs):
+        nonmatching_args = {k: v for k, v in args.items() if fixed_specs.get(k) != v}
+        nonmatching_specs = {k: v for k, v in fixed_specs.items() if args.get(k) != v}
+        raise AssertionError(f"fixed specs don't match: args {nonmatching_args} vs "
+                             f"specs {nonmatching_specs}")
     return fits_spec(args, title_specs) and fits_spec(args, series_specs)
 
 

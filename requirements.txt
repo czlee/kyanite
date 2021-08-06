@@ -2,3 +2,4 @@ numpy
 jupyterlab
 matplotlib
 pandas
+tikzplotlib
