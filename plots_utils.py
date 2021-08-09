@@ -467,11 +467,15 @@ def plot_comparison(field, analog_path, digital_path, all_analog_specs, all_digi
     plot_all_dataframes(digital_averages, title_specs, "round", axs=[ax], nolabel=True,
         linestyle=digital_linestyle, **kwargs)
 
+    kwargs_without_linewidth = kwargs.copy()  # avoid kwarg conflict
+    if 'linewidth' in kwargs_without_linewidth:
+        del kwargs_without_linewidth['linewidth']
+
     def plot_reduction(reduce_fn, linewidth):
         analog_reduced = aggregate_training_chart_data(analog_data, [field], analog_series_specs.keys(), reduce_fn=reduce_fn)  # noqa: E501
-        plot_all_dataframes(analog_reduced, axs=[ax], linewidth=linewidth, nolabel=True, **kwargs)
+        plot_all_dataframes(analog_reduced, axs=[ax], linewidth=linewidth, nolabel=True, **kwargs_without_linewidth)  # noqa: E501
         digital_reduced = aggregate_training_chart_data(digital_data, [field], digital_series_specs.keys(), reduce_fn=reduce_fn)  # noqa: E501
-        plot_all_dataframes(digital_reduced, axs=[ax], linewidth=linewidth, nolabel=True, linestyle=digital_linestyle, **kwargs)  # noqa: E501
+        plot_all_dataframes(digital_reduced, axs=[ax], linewidth=linewidth, nolabel=True, linestyle=digital_linestyle, **kwargs_without_linewidth)  # noqa: E501
 
     if plot_range:
         plot_reduction(np.min, 0.5)
