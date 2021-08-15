@@ -64,10 +64,6 @@ def get_args(directory):
         args['dataset'] = 'epsilon-small' if args['small'] else 'epsilon'
         del args['small']
 
-    # We added the --momentum-client argument late too.
-    if 'momentum_client' not in args:
-        args['momentum_client'] = 0.0
-
     return args
 
 
