@@ -13,6 +13,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import scipy.stats as st
 from IPython.display import display, Markdown
 
 
@@ -331,8 +332,8 @@ def aggregate_training_chart_data(data: dict, fields: list, series_labels: list,
 
 def plot_averaged_training_charts(results_dir: Path, fields: list, title_specs: dict,
                                   fixed_specs: dict, series_specs: dict, axs=None,
-                                  plot_range=False, plot_quartiles=False, nolabel=False,
-                                  **kwargs):
+                                  plot_range=False, plot_quartiles=False, plot_confints=False,
+                                  nolabel=False, **kwargs):
     """Plots training charts (i.e., metrics vs round number) from the results
     in `results_dir`, for each of the metrics specified in `fields`.
 
@@ -388,8 +389,11 @@ def plot_averaged_training_charts(results_dir: Path, fields: list, title_specs: 
         plot_reduction(np.min, 0.5)
         plot_reduction(np.max, 0.5)
     if plot_quartiles:
-        plot_reduction(lambda a, **kwargs: np.quantile(a, 0.25, **kwargs), 1)
-        plot_reduction(lambda a, **kwargs: np.quantile(a, 0.75, **kwargs), 1)
+        plot_reduction(quartile_lower, 1)
+        plot_reduction(quartile_upper, 1)
+    if plot_confints:
+        plot_reduction(confint_lower, 0.5)
+        plot_reduction(confint_upper, 0.5)
 
 
 # function that plots final accuracy vs number of clients, but averaged over many iterations
@@ -443,7 +447,7 @@ def plot_evaluation_vs_clients(results_dir: Path, fields: list, title_specs: dic
 # function that plots analog vs digital plots
 
 def plot_comparison(field, analog_path, digital_path, all_analog_specs, all_digital_specs,
-                    plot_range=False, plot_quartiles=False, ax=None, **kwargs):
+                    plot_range=False, plot_quartiles=False, plot_confints=False, ax=None, **kwargs):
 
     if ax is None:
         plt.figure(figsize=(8, 5))
@@ -481,8 +485,11 @@ def plot_comparison(field, analog_path, digital_path, all_analog_specs, all_digi
         plot_reduction(np.min, 0.5)
         plot_reduction(np.max, 0.5)
     if plot_quartiles:
-        plot_reduction(lambda a, **kwargs: np.quantile(a, 0.25, **kwargs), 1)
-        plot_reduction(lambda a, **kwargs: np.quantile(a, 0.75, **kwargs), 1)
+        plot_reduction(quartile_lower, 1)
+        plot_reduction(quartile_upper, 1)
+    if plot_confints:
+        plot_reduction(confint_lower, 0.75)
+        plot_reduction(confint_upper, 0.75)
 
     # add line type indicators for analog and digital
     x, y = ax.get_children()[0].get_data()
@@ -494,3 +501,26 @@ def plot_comparison(field, analog_path, digital_path, all_analog_specs, all_digi
     ax.set_title(title)
     ax.set_xlabel("round")
     ax.set_ylabel(field)
+
+
+# Reduction functions
+# Currently, these are always run with `axis=1`, but making `axis` an argument allows us to avoid
+# having to create helper functions for things like `np.min(x, axis=1)`.
+
+# Confidence interval code:
+# https://stackoverflow.com/questions/15033511/compute-a-confidence-interval-from-sample-data
+
+def confint_lower(x, axis):
+    return st.t.ppf(0.025, x.shape[axis] - 1, loc=np.mean(x, axis=axis), scale=st.sem(x, axis=axis))
+
+
+def confint_upper(x, axis):
+    return st.t.ppf(0.975, x.shape[axis] - 1, loc=np.mean(x, axis=axis), scale=st.sem(x, axis=axis))
+
+
+def quartile_lower(x, axis):
+    return np.quantile(x, 0.25, axis=axis)
+
+
+def quartile_upper(x, axis):
+    return np.quantile(x, 0.75, axis=axis)

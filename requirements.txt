@@ -3,3 +3,4 @@ jupyterlab
 matplotlib
 pandas
 tikzplotlib
+scipy # used for confidence intervals
