@@ -36,6 +36,9 @@ abbreviations = {
     'rounding_method': 'rdm',
     'lr_client': 'lr',
     'momentum_client': 'mom',
+    'learning_rate': 'lr',
+    'momentum': 'mom',
+    'weight_decay': 'wd',
     'parameter_schedule': 'paramsch',
 }
 
