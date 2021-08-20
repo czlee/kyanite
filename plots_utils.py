@@ -6,6 +6,7 @@
 # July 2021
 
 import datetime
+import itertools
 import json
 import warnings
 from pathlib import Path
@@ -64,10 +65,6 @@ def get_args(directory):
     if 'small' in args:
         args['dataset'] = 'epsilon-small' if args['small'] else 'epsilon'
         del args['small']
-
-    # We added --momentum-client late, it was previously always 0.0
-    if 'momentum_client' not in args:
-        args['momentum_client'] = 0.0
 
     return args
 
@@ -178,13 +175,14 @@ def fits_all_specs(args, title_specs, fixed_specs, series_specs, ignore_specs=se
     `title_specs` and `series_specs`, and False if not.
     """
     found_args = set(args.keys()) - ignore_specs
-    optional_args = {key for key, value in fixed_specs.items()
+    optional_args = {key for key, value in itertools.chain(fixed_specs.items(), title_specs.items())
                      if isinstance(value, list) and '__missing__' in value}
     specified_args = (set(title_specs) | set(fixed_specs) | set(series_specs)) - ignore_specs
     if not (found_args <= specified_args):
         raise AssertionError("found but not specified: " + str(found_args - specified_args))
     if not (specified_args - optional_args <= found_args):
         not_found_args = specified_args - optional_args - found_args
+        print("optional args: " + str(optional_args))
         raise AssertionError("specified but not found: " + str(not_found_args))
     if not fits_spec(args, fixed_specs):
         nonmatching_args = {k: v for k, v in args.items() if fixed_specs.get(k) != v}
@@ -198,7 +196,10 @@ def specs_string(specs):
     """Returns a string suitable for representing the keys and values in `specs`.
     `specs` should be something yielding 2-tuples `(key, value)`. If you want to
     pass in a `dict`, use the `dict.items()` method."""
-    return ", ".join(f"{abbreviations.get(key, key)}={value}" for key, value in specs)
+    chunk_size = 3
+    parts = [f"{abbreviations.get(key, key)}={value}" for key, value in specs]
+    lines = [", ".join(parts[i:i + chunk_size]) for i in range(0, len(parts), chunk_size)]
+    return "\n".join(lines)
 
 
 def make_axes(n, ncols=3, axsize=(8, 5)):
