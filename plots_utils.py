@@ -201,11 +201,11 @@ def specs_string(specs):
     return ", ".join(f"{abbreviations.get(key, key)}={value}" for key, value in specs)
 
 
-def make_axes(n, ncols=3):
+def make_axes(n, ncols=3, axsize=(8, 5)):
     """Makes and returns handles to `n` axes in subplots."""
     plot_cols = min(ncols, n)
     plot_rows = (n + ncols - 1) // ncols  # round up
-    figsize = (8 * plot_cols, 5 * plot_rows)
+    figsize = (axsize[0] * plot_cols, axsize[1] * plot_rows)
     fig, axs = plt.subplots(plot_rows, plot_cols, figsize=figsize, squeeze=False, sharex=True)
     axs = axs.flatten()
     return axs
