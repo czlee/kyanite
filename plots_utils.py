@@ -69,6 +69,12 @@ def get_args(directory):
         args['dataset'] = 'epsilon-small' if args['small'] else 'epsilon'
         del args['small']
 
+    # This is the wrong place to put this hack, but its purposes it to avoid
+    # str-to-NoneType comparisons in the `sorted()` call in
+    # `aggregate_training_chart_data()`.
+    if 'lr_scheduler' in args and args['lr_scheduler'] is None:
+        args['lr_scheduler'] = 'none'
+
     return args
 
 
