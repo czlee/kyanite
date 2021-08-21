@@ -178,7 +178,8 @@ def fits_all_specs(args, title_specs, fixed_specs, series_specs, ignore_specs=se
     `title_specs` and `series_specs`, and False if not.
     """
     found_args = set(args.keys()) - ignore_specs
-    optional_args = {key for key, value in itertools.chain(fixed_specs.items(), title_specs.items())
+    optional_args = {key for key, value in
+                     itertools.chain(fixed_specs.items(), title_specs.items(), series_specs.items())
                      if isinstance(value, list) and '__missing__' in value}
     specified_args = (set(title_specs) | set(fixed_specs) | set(series_specs)) - ignore_specs
     if not (found_args <= specified_args):
@@ -200,7 +201,7 @@ def specs_string(specs):
     `specs` should be something yielding 2-tuples `(key, value)`. If you want to
     pass in a `dict`, use the `dict.items()` method."""
     chunk_size = 3
-    parts = [f"{abbreviations.get(key, key)}={value}" for key, value in specs]
+    parts = [f"{abbreviations.get(key, key)}={value}" for key, value in specs if value != 'n/s']
     lines = [", ".join(parts[i:i + chunk_size]) for i in range(0, len(parts), chunk_size)]
     return "\n".join(lines)
 
@@ -297,7 +298,7 @@ def collect_all_training_data(results_dir: Path, fields: list, title_specs: dict
         if not fits_all_specs(args, title_specs, fixed_specs, series_specs):
             continue
 
-        series = tuple(args[key] for key in series_specs.keys())  # identifier for series
+        series = tuple(args.get(key, 'n/s') for key in series_specs.keys())  # identifier for series
         if series not in data:  # don't use setdefault to avoid generating this every time
             data[series] = {field: pd.DataFrame() for field in fields}
 
