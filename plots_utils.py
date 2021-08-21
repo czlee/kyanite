@@ -83,9 +83,12 @@ def get_eval(directory):
 def fits_spec(args, specs):
     """Returns True if the given `args` dict matches the given `specs` dict,
     for those entries in `specs`."""
+    specs_for_all = ["__all__", "__all_incl_missing__", "__all_skip_missing__"]
     for key, value in specs.items():
         arg = args.get(key, "__missing__")  # magic default
-        if value == "__all__":              # magic value
+        if arg != "__missing__" and value in specs_for_all:  # magic values
+            matches = True
+        elif arg == "__missing__" and value == "__all_incl_missing__":
             matches = True
         elif isinstance(value, list):
             matches = arg in value
@@ -170,6 +173,22 @@ def all_subsubdirectories(results_dir):
     return directories
 
 
+def value_permits_missing(value):
+    allowed_values = [
+        '__missing__',
+        '__all_incl_missing__',
+        '__all_skip_missing__',
+        '__skip_missing__',
+    ]
+    if value in allowed_values:
+        return True
+    if isinstance(value, list):
+        for allowed_value in allowed_values:
+            if allowed_value in value:
+                return True
+    return False
+
+
 def fits_all_specs(args, title_specs, fixed_specs, series_specs, ignore_specs=set()):
     """Checks if the `args` satisfy all of the `specs`. An assertion fails if:
      - any argument key is not found in the specs or vice versa
@@ -178,21 +197,27 @@ def fits_all_specs(args, title_specs, fixed_specs, series_specs, ignore_specs=se
     `title_specs` and `series_specs`, and False if not.
     """
     found_args = set(args.keys()) - ignore_specs
-    optional_args = {key for key, value in
-                     itertools.chain(fixed_specs.items(), title_specs.items(), series_specs.items())
-                     if isinstance(value, list) and '__missing__' in value}
+    optional_args = {
+        key for key, value in
+        itertools.chain(fixed_specs.items(), title_specs.items(), series_specs.items())
+        if value_permits_missing(value)
+    }
     specified_args = (set(title_specs) | set(fixed_specs) | set(series_specs)) - ignore_specs
+
     if not (found_args <= specified_args):
         raise AssertionError("found but not specified: " + str(found_args - specified_args))
+
     if not (specified_args - optional_args <= found_args):
         not_found_args = specified_args - optional_args - found_args
         print("optional args: " + str(optional_args))
         raise AssertionError("specified but not found: " + str(not_found_args))
+
     if not fits_spec(args, fixed_specs):
         nonmatching_args = {k: v for k, v in args.items() if fixed_specs.get(k) != v}
         nonmatching_specs = {k: v for k, v in fixed_specs.items() if args.get(k) != v}
         raise AssertionError(f"fixed specs don't match: args {nonmatching_args} vs "
                              f"specs {nonmatching_specs}")
+
     return fits_spec(args, title_specs) and fits_spec(args, series_specs)
 
 
