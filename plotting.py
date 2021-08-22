@@ -115,9 +115,11 @@ abbreviations = {
     'learning_rate': 'lr',
     'momentum': 'mom',
     'weight_decay': 'wd',
+    'weight_decay_client': 'wd',
     'parameter_schedule': 'parsch',
     'optimizer': 'opt',
     'lr_scheduler': 'lrsch',
+    'lr_scheduler_client': 'lrsch',
 }
 
 
