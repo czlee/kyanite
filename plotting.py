@@ -68,6 +68,7 @@ import datetime
 import json
 import os
 import warnings
+from collections import Counter
 from pathlib import Path
 from typing import Sequence
 
@@ -76,6 +77,9 @@ import numpy as np
 import pandas as pd
 import scipy.stats as st
 from IPython.display import display, Markdown
+
+
+verbosity = 1
 
 
 _action_values = [
@@ -206,7 +210,7 @@ def show_timestamp_info(paths, specs=None):
 
         if specs is not None:
             args = get_args(directory)
-            if args['script'] != specs['script'] or not fits_all_specs(args, specs):
+            if args['script'] != specs['script'] or len(check_spec_match(args, specs)) > 0:
                 continue
 
         start = datetime.datetime.strptime(get_args_file(directory)['started'], isofmt)
@@ -293,7 +297,7 @@ def iterspecs(specs):
         yield key, action, spec_value, meta
 
 
-def fits_all_specs(args: dict, specs: dict, ignore=set()):
+def check_spec_match(args: dict, specs: dict, ignore=set()):
     """Checks if the `args` (as returned by `get_args()`) satisfy the `specs`.
 
     Raises `ValueError` if:
@@ -301,10 +305,9 @@ def fits_all_specs(args: dict, specs: dict, ignore=set()):
     - a spec with `'expect'` specified doesn't match, or
     - a spec with `missing-action: error` wasn't found.
 
-    Otherwise, returns a list of keys that don't match.
-
-    False if this experiment should be skipped, or True if it
-    should be included.
+    Otherwise, returns a list of keys that don't match. Callers who just need
+    a binary match/nonmatch result should use `not check_spec_match(...)`, since
+    if it matches in full, the list of nonmatching keys will be empty.
     """
 
     # First, check the script.
@@ -319,6 +322,7 @@ def fits_all_specs(args: dict, specs: dict, ignore=set()):
 
     # Third, check that values match
     nonmatching_fatal = {}  # {key: (arg_value, spec_value)}, keep track of these
+    nonmatching_skip = []
 
     for key, action, spec_value, meta in iterspecs(specs):
 
@@ -333,7 +337,8 @@ def fits_all_specs(args: dict, specs: dict, ignore=set()):
             continue
         else:
             assert meta['missing-action'] == 'skip'  # only remaining possibility
-            return False
+            nonmatching_skip.append(key)
+            continue
 
         if spec_value == '__all__':
             match = True
@@ -347,9 +352,8 @@ def fits_all_specs(args: dict, specs: dict, ignore=set()):
         if not match:
             if action in _action_expect_values:
                 nonmatching_fatal[key] = (arg_value, spec_value)
-                continue
             else:
-                return False
+                nonmatching_skip.append(key)
 
     if nonmatching_fatal:
         print("Non-matching arguments:")
@@ -357,7 +361,7 @@ def fits_all_specs(args: dict, specs: dict, ignore=set()):
             print(f"{key}: found {arg_value!r}, specified {spec_value!r}")
         raise ValueError("One or more expected arguments didn't match, see above")
 
-    return True
+    return nonmatching_skip
 
 
 def specs_string(specs, chunk_size=3):
@@ -475,7 +479,8 @@ def plot_all_dataframes(dataframes: dict, title_suffix=None, xlabel=None, axs=No
 # ==============================================================================
 
 
-def collect_all_training_data(paths: Sequence[Path], fields: Sequence[str], specs, quiet=False):
+def collect_all_training_data(paths: Sequence[Path], fields: Sequence[str], specs, quiet=False,
+                              other_scripts=[]):
     """Returns a dict of dicts of `DataFrame` objects, representing all training
     data relevant to the specifications in `specs`. For example:
 
@@ -501,19 +506,23 @@ def collect_all_training_data(paths: Sequence[Path], fields: Sequence[str], spec
     """
 
     data = {}
-    skipped_script = 0
-    skipped_series = set()
+    skipped_scripts = Counter()
+    skipped_keys = Counter()
+    skipped_for_keys = 0
 
     for directory in all_experiment_directories(paths):
         args = get_args(directory)
         if args['script'] != specs['script']:
-            skipped_script += 1
+            if args['script'] not in other_scripts:
+                skipped_scripts[args['script']] += 1
             continue
 
         series = get_series_values(args, specs)
+        nonmatching_keys = check_spec_match(args, specs)
 
-        if not fits_all_specs(args, specs):
-            skipped_series.add(series)
+        if len(nonmatching_keys) > 0:
+            skipped_keys.update(nonmatching_keys)
+            skipped_for_keys += 1
             continue
 
         if series not in data:  # don't use setdefault to avoid generating this every time
@@ -523,12 +532,22 @@ def collect_all_training_data(paths: Sequence[Path], fields: Sequence[str], spec
         for field in fields:
             data[series][field][directory] = training[field]
 
-    if skipped_script and not quiet:
-        display(Markdown(f"- Skipping {skipped_script} experiments using a different script"))
-    if skipped_series and not quiet:
-        display(Markdown(f"- Skipping {len(skipped_series)} series that don't match specs"))
+    if verbosity > 0 and not quiet:
+        print_skipped(skipped_scripts, skipped_keys, skipped_for_keys)
 
     return data
+
+
+def print_skipped(skipped_scripts, skipped_keys, skipped_for_keys):
+    if skipped_scripts:
+        skipped_list = ", ".join(f"{s} ({c})" for s, c in skipped_scripts.most_common())
+        print(f"- Skipping {sum(skipped_scripts.values())} runs using "
+              f"{len(skipped_scripts)} other scripts: {skipped_list}")
+
+    if skipped_for_keys or skipped_keys:
+        skipped_list = ", ".join(f"{k} ({c})" for k, c in skipped_keys.most_common())
+        print(f"- Skipping {skipped_for_keys} runs that don't match "
+              f"on {len(skipped_keys)} keys: {skipped_list}")
 
 
 def aggregate_training_chart_data(data: dict, fields: list, series_keys: list, reduce_fn=np.mean):
@@ -580,7 +599,7 @@ def quartile_upper(x, axis):
     return np.quantile(x, 0.75, axis=axis)
 
 
-statistic_functions = {
+extra_line_specs = {
     'range': ([np.min, np.max], 1 / 3),
     'quartiles': ([quartile_lower, quartile_upper], 2 / 3),
     'confints': ([confint_lower, confint_upper], 1 / 2),
@@ -593,7 +612,7 @@ statistic_functions = {
 
 def plot_averaged_training_charts(
         paths: Sequence[Path], fields: Sequence[str], specs: dict,
-        axs=None, extra_lines=[], nolabel=False, linewidth=1.5, xlabel="round",
+        axs=None, extra_lines=[], nolabel=False, linewidth=1.5, xlabel="round", quiet=False,
         **plot_kwargs):
     """Plots training charts (i.e., metrics vs round number) from results in `paths`,
     for each of the metrics specified in `fields`.
@@ -612,7 +631,7 @@ def plot_averaged_training_charts(
     Other keyword arguments are passed through to the `DataFrame.plot()` function.
     """
 
-    data = collect_all_training_data(paths, fields, specs)
+    data = collect_all_training_data(paths, fields, specs, quiet=quiet)
     series_keys = get_series_keys(specs)
     averages = aggregate_training_chart_data(data, fields, series_keys)
     if axs is None:
@@ -622,8 +641,71 @@ def plot_averaged_training_charts(
                         axs=axs, nolabel=nolabel, linewidth=linewidth, **plot_kwargs)
 
     for extra in extra_lines:
-        reduce_fns, thin_factor = statistic_functions[extra]
+        reduce_fns, thin_factor = extra_line_specs[extra]
         for reduce_fn in reduce_fns:
             reduced = aggregate_training_chart_data(data, fields, series_keys, reduce_fn=reduce_fn)
             plot_all_dataframes(reduced, axs=axs, nolabel=True, linewidth=linewidth * thin_factor,
                                 **plot_kwargs)
+
+
+def plot_comparison(
+        field: str, paths: Sequence[Path], analog_specs: dict, digital_specs: dict,
+        ax=None, extra_lines=[], figsize=(8, 5), xlabel="round", linewidth=1.5, quiet=False,
+        **plot_kwargs):
+    """Plots a comparison between two groups of plots, analog (solid lines) and
+    digital (dash lines).
+
+    `analog_specs` and `digital_specs` are argument specification dictionaries,
+    as specified above.
+
+    If `ax` is provided, it must be a `matplotlib.axes.Axes` object, and it is
+    used instead of creating a new one.
+
+    `extra_lines` can be a list containing some subset of `range`, `quartiles` and
+    `confints`. These lines will be added to the plots as thinner lines.
+
+    Other keyword arguments are passed through to the `DataFrame.plot()` function.
+    """
+    if ax is None:
+        plt.figure(figsize=figsize)
+        ax = plt.axes()
+
+    digital_linestyle = (0, (4, 2, 1, 2))
+
+    ana_data = collect_all_training_data(paths, [field], analog_specs,
+                                         quiet=quiet, other_scripts=digital_specs['script'])
+    dig_data = collect_all_training_data(paths, [field], digital_specs,
+                                         quiet=quiet, other_scripts=analog_specs['script'])
+    ana_series_keys = get_series_keys(analog_specs)
+    dig_series_keys = get_series_keys(digital_specs)
+    ana_averages = aggregate_training_chart_data(ana_data, [field], ana_series_keys)
+    dig_averages = aggregate_training_chart_data(dig_data, [field], dig_series_keys)
+
+    # modify the sample sizes to have both analog and digital
+    for (_, ana), (_, dig) in zip(ana_averages[field].items(), dig_averages[field].items()):
+        ana.attrs['sample_size'] = f"{ana.attrs['sample_size']} / {dig.attrs['sample_size']}"
+
+    plot_all_dataframes(ana_averages, xlabel=xlabel, axs=[ax], linewidth=linewidth, **plot_kwargs)
+    plot_all_dataframes(dig_averages, xlabel=xlabel, axs=[ax], linewidth=linewidth,
+                        linestyle=digital_linestyle, nolabel=True, **plot_kwargs)
+
+    for extra in extra_lines:
+        reduce_fns, thin_factor = extra_line_specs[extra]
+        for reduce_fn in reduce_fns:
+            ana_reduced = aggregate_training_chart_data(ana_data, [field], ana_series_keys, reduce_fn)
+            dig_reduced = aggregate_training_chart_data(dig_data, [field], dig_series_keys, reduce_fn)
+            plot_all_dataframes(ana_reduced, axs=[ax], linewidth=linewidth * thin_factor,
+                                nolabel=True, **plot_kwargs)
+            plot_all_dataframes(dig_reduced, axs=[ax], linewidth=linewidth * thin_factor,
+                                nolabel=True, linestyle=digital_linestyle, **plot_kwargs)
+
+    # add line type indicators for analog and digital
+    x, y = ax.get_children()[0].get_data()
+    ax.plot([x[0]], [y[0]], color='k', label="analog", **plot_kwargs)
+    ax.plot([x[0]], [y[0]], color='k', linestyle=digital_linestyle, label="digital", **plot_kwargs)
+    ax.legend()
+
+    title = "analog vs digital\n" + get_title_string(digital_specs)
+    ax.set_title(title)
+    ax.set_xlabel("round")
+    ax.set_ylabel(field)
