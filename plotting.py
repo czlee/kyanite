@@ -74,6 +74,7 @@ from typing import Sequence
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import scipy.stats as st
 from IPython.display import display, Markdown
 
 
@@ -115,6 +116,10 @@ abbreviations = {
     'lr_scheduler': 'lrsch',
 }
 
+
+# ==============================================================================
+# File management and parsing
+# ==============================================================================
 
 def get_args_file(directory: Path):
     argsfile = directory / 'arguments.json'
@@ -164,7 +169,8 @@ def get_eval(directory: Path):
 def all_experiment_directories(paths):
     """Returns a list with all experiment directories in `paths` that have
     completed. A directory is considered to have finished if it has an
-    "evaluation.json" file. This will go
+    "evaluation.json" file. This recurses over all subdirectories of the given
+    paths.
     """
     directories = [
         Path(dirpath)
@@ -175,8 +181,7 @@ def all_experiment_directories(paths):
     return directories
 
 
-def _duration_str(times):
-    start, finish = times
+def _duration_str(start, finish):
     duration = finish - start
     hours, remainder = divmod(duration.seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
@@ -191,7 +196,9 @@ def _duration_str(times):
 
 
 def show_timestamp_info(paths, specs=None):
-    """Shows timestamp info of the earliest and latest experiments in the given directory."""
+    """Shows timestamp info of the earliest and latest experiments in the given
+    directory.
+    """
     times = []
     isofmt = '%Y-%m-%dT%H:%M:%S.%f'
 
@@ -199,53 +206,38 @@ def show_timestamp_info(paths, specs=None):
 
         if specs is not None:
             args = get_args(directory)
-            if args['script'] != specs['script']:
-                continue
-            if not fits_all_specs(args, specs):
+            if args['script'] != specs['script'] or not fits_all_specs(args, specs):
                 continue
 
-        started_str = get_args_file(directory)['started']
-        started = datetime.datetime.strptime(started_str, isofmt)
-        try:
-            finished_str = get_eval(directory)['finished']
-        except FileNotFoundError:
-            warnings.warn(f"No evaluation.json file in {directory}")
-            continue
-        finished = datetime.datetime.strptime(finished_str, isofmt)
-        if finished < started:
-            warnings.warn(f"Finished before it started: {directory}")
-        times.append((started, finished))
+        start = datetime.datetime.strptime(get_args_file(directory)['started'], isofmt)
+        finish = datetime.datetime.strptime(get_eval(directory)['finished'], isofmt)
+        if finish < start:
+            warnings.warn(f"Finished before it start: {directory}")
+        times.append((start, finish))
 
-    times_of_interest = {  # ((start, finish), column_to_bold)
-        'first to start': (min(times), 1),
-        'last to finish': (max(times, key=lambda x: (x[1], x[0])), 2),
-        'shortest': (min(times, key=lambda x: x[1] - x[0]), 3),
-        'longest': (max(times, key=lambda x: x[1] - x[0]), 3),
-    }
+    times_of_interest = (
+        # (name, column to bold, (start, finish))
+        ('first to start', 1, min(times)),
+        ('last to finish', 2, max(times, key=lambda x: (x[1], x[0]))),
+        ('shortest',       3, min(times, key=lambda x: x[1] - x[0])),  # noqa: E241
+        ('longest',        3, max(times, key=lambda x: x[1] - x[0])),  # noqa: E241
+    )
 
-    printout = "| experiments in this directory | started at | finished at | duration |\n"
+    # construct table
+    printout = "| experiments | started at | finished at | duration |\n"
     printout += "|--:|:-:|:-:|--:|\n"
     fmt = '%d %b %Y, %H:%M:%S'
-    for name, (times, column_to_bold) in times_of_interest.items():
-        cells = [name, times[0].strftime(fmt), times[1].strftime(fmt), _duration_str(times)]
-        cells[column_to_bold] = "**" + cells[column_to_bold] + "**"
+    for name, bold_col, (start, finish) in times_of_interest:
+        cells = [name, start.strftime(fmt), finish.strftime(fmt), _duration_str(start, finish)]
+        cells[bold_col] = "**" + cells[bold_col] + "**"
         printout += "| " + " | ".join(cells) + " |\n"
 
     display(Markdown(printout))
 
 
-def _split_spec(spec: Sequence):
-    """Returns the 'meta' options dict of the given spec value (as defined in
-    "Argument specification dictionaries" above), or an empty dict if the third
-    element of the tuple isn't given.
-    """
-    if len(spec) not in [2, 3]:
-        raise ValueError(f"Spec tuple should have 2 or 3 items: {spec}")
-    elif len(spec) == 2:
-        return *spec, {}
-    else:
-        return spec
-
+# ==============================================================================
+# Argument specification dictionary handling
+# ==============================================================================
 
 def iterspecs(specs):
     """Convenience function iterating through an argument specification
@@ -294,6 +286,9 @@ def iterspecs(specs):
             if isinstance(spec_value, list) or isinstance(spec_value, tuple):
                 warnings.warn(f"spec for {key} has action {action} and a list of values, "
                               "are you sure about this wasn't meant to be series?")
+            if callable(spec_value):
+                warnings.warn(f"spec for {key} has action {action} and is callable, "
+                              "are you sure about this wasn't meant to be series?")
 
         yield key, action, spec_value, meta
 
@@ -306,7 +301,9 @@ def fits_all_specs(args: dict, specs: dict, ignore=set()):
     - a spec with `'expect'` specified doesn't match, or
     - a spec with `missing-action: error` wasn't found.
 
-    Otherwise, returns False if this experiment should be skipped, or True if it
+    Otherwise, returns a list of keys that don't match.
+
+    False if this experiment should be skipped, or True if it
     should be included.
     """
 
@@ -340,6 +337,8 @@ def fits_all_specs(args: dict, specs: dict, ignore=set()):
 
         if spec_value == '__all__':
             match = True
+        elif callable(spec_value):
+            match = spec_value(arg_value)
         elif isinstance(spec_value, list):
             match = arg_value in spec_value
         else:
@@ -390,7 +389,7 @@ def get_series_values(args: dict, specs: dict) -> tuple:
     """
     arg_values = []
 
-    for key, action, spec_value, meta in iterspecs(specs):
+    for key, action, _, meta in iterspecs(specs):
         if action not in ['series', 'series_expect']:
             continue
         elif key not in args:
@@ -412,7 +411,11 @@ def get_title_string(specs, chunk_size=3):
     return specs_string(title_specs, chunk_size)
 
 
-def make_axes(n, ncols=3, axsize=(8, 5)):
+# ==============================================================================
+# Plotting
+# ==============================================================================
+
+def make_axes(n: int, ncols=3, axsize=(8, 5)):
     """Makes and returns handles to `n` axes in subplots."""
     plot_cols = min(ncols, n)
     plot_rows = (n + ncols - 1) // ncols  # round up
@@ -420,9 +423,6 @@ def make_axes(n, ncols=3, axsize=(8, 5)):
     fig, axs = plt.subplots(plot_rows, plot_cols, figsize=figsize, squeeze=False, sharex=True)
     axs = axs.flatten()
     return axs
-
-
-# Main plotting functions
 
 
 def plot_all_dataframes(dataframes: dict, title_suffix=None, xlabel=None, axs=None,
@@ -462,11 +462,17 @@ def plot_all_dataframes(dataframes: dict, title_suffix=None, xlabel=None, axs=No
             series.plot(ax=ax, label=label, **kwargs)
 
         ax.legend()
+        ax.grid(True)
         ax.set_ylabel(field)
         if xlabel:
             ax.set_xlabel(xlabel)
         if title_suffix:
             ax.set_title(field + "\n" + title_suffix)
+
+
+# ==============================================================================
+# Data management
+# ==============================================================================
 
 
 def collect_all_training_data(paths: Sequence[Path], fields: Sequence[str], specs, quiet=False):
@@ -549,9 +555,45 @@ def aggregate_training_chart_data(data: dict, fields: list, series_keys: list, r
     return reduced
 
 
+# ==============================================================================
+# Statistical functions
+# ==============================================================================
+# Currently, these are always run with `axis=1`, but making `axis` an argument allows us to avoid
+# having to create helper functions for things like `np.min(x, axis=1)`.
+
+# Confidence interval code:
+# https://stackoverflow.com/questions/15033511/compute-a-confidence-interval-from-sample-data
+
+def confint_lower(x, axis):
+    return st.t.ppf(0.025, x.shape[axis] - 1, loc=np.mean(x, axis=axis), scale=st.sem(x, axis=axis))
+
+
+def confint_upper(x, axis):
+    return st.t.ppf(0.975, x.shape[axis] - 1, loc=np.mean(x, axis=axis), scale=st.sem(x, axis=axis))
+
+
+def quartile_lower(x, axis):
+    return np.quantile(x, 0.25, axis=axis)
+
+
+def quartile_upper(x, axis):
+    return np.quantile(x, 0.75, axis=axis)
+
+
+statistic_functions = {
+    'range': ([np.min, np.max], 1 / 3),
+    'quartiles': ([quartile_lower, quartile_upper], 2 / 3),
+    'confints': ([confint_lower, confint_upper], 1 / 2),
+}
+
+
+# ==============================================================================
+# Top-level functions
+# ==============================================================================
+
 def plot_averaged_training_charts(
         paths: Sequence[Path], fields: Sequence[str], specs: dict,
-        axs=None, add_lines=[], nolabel=False, linewidth=1.5, xlabel="round",
+        axs=None, extra_lines=[], nolabel=False, linewidth=1.5, xlabel="round",
         **plot_kwargs):
     """Plots training charts (i.e., metrics vs round number) from results in `paths`,
     for each of the metrics specified in `fields`.
@@ -561,7 +603,7 @@ def plot_averaged_training_charts(
     If `axs` is provided, it must be a list of `matplotlib.axes.Axes` object,
     and the plots will be drawn on these axes rather than creating new ones.
 
-    `add_lines` can be a list containing some subset of `range`, `quartiles` and
+    `extra_lines` can be a list containing some subset of `range`, `quartiles` and
     `confints`. These lines will be added to the plots as thinner lines.
 
     If `nolabel` is True, it assigns no label to the main plot series (so it
@@ -570,8 +612,6 @@ def plot_averaged_training_charts(
     Other keyword arguments are passed through to the `DataFrame.plot()` function.
     """
 
-    plot_kwargs['linewidth'] = linewidth
-
     data = collect_all_training_data(paths, fields, specs)
     series_keys = get_series_keys(specs)
     averages = aggregate_training_chart_data(data, fields, series_keys)
@@ -579,4 +619,11 @@ def plot_averaged_training_charts(
         axs = make_axes(len(fields))
 
     plot_all_dataframes(averages, title_suffix=get_title_string(specs), xlabel=xlabel,
-                        axs=axs, nolabel=nolabel, **plot_kwargs)
+                        axs=axs, nolabel=nolabel, linewidth=linewidth, **plot_kwargs)
+
+    for extra in extra_lines:
+        reduce_fns, thin_factor = statistic_functions[extra]
+        for reduce_fn in reduce_fns:
+            reduced = aggregate_training_chart_data(data, fields, series_keys, reduce_fn=reduce_fn)
+            plot_all_dataframes(reduced, axs=axs, nolabel=True, linewidth=linewidth * thin_factor,
+                                **plot_kwargs)
