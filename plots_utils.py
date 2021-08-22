@@ -1,6 +1,12 @@
-"""Plotting utilities for convenience in Jupyter notebooks."""
+"""Plotting utilities for convenience in Jupyter notebooks.
 
-# These were originally in misc-plots-1.ipynb.
+DEPRECATED: This module is now deprecated and kept around only for legacy
+compatibility. Use the functions in plotting.py` in new scripts instead.
+"""
+
+# These were originally in misc-plots-1.ipynb. Eventually there were too many
+# hacks in this, so I started afresh in plotting.py once I had a better idea of
+# my plotting needs.
 
 # Chuan-Zheng Lee <czlee@stanford.edu>
 # July 2021
