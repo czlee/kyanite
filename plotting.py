@@ -653,7 +653,7 @@ def plot_averaged_training_charts(
 def plot_comparison(
         field: str, paths: Sequence[Path], analog_specs: dict, digital_specs: dict,
         ax=None, extra_lines=[], figsize=(8, 5), xlabel="round", linewidth=1.5, quiet=False,
-        **plot_kwargs):
+        both_legends=False, **plot_kwargs):
     """Plots a comparison between two groups of plots, analog (solid lines) and
     digital (dash lines).
 
@@ -684,12 +684,13 @@ def plot_comparison(
     dig_averages = aggregate_training_chart_data(dig_data, [field], dig_series_keys)
 
     # modify the sample sizes to have both analog and digital
-    for (_, ana), (_, dig) in zip(ana_averages[field].items(), dig_averages[field].items()):
-        ana.attrs['sample_size'] = f"{ana.attrs['sample_size']} / {dig.attrs['sample_size']}"
+    if not both_legends:
+        for (_, ana), (_, dig) in zip(ana_averages[field].items(), dig_averages[field].items()):
+            ana.attrs['sample_size'] = f"{ana.attrs['sample_size']} / {dig.attrs['sample_size']}"
 
     plot_all_dataframes(ana_averages, xlabel=xlabel, axs=[ax], linewidth=linewidth, **plot_kwargs)
     plot_all_dataframes(dig_averages, xlabel=xlabel, axs=[ax], linewidth=linewidth,
-                        linestyle=digital_linestyle, nolabel=True, **plot_kwargs)
+                        linestyle=digital_linestyle, nolabel=not both_legends, **plot_kwargs)
 
     for extra in extra_lines:
         reduce_fns, thin_factor = extra_line_specs[extra]
