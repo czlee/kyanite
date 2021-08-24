@@ -666,7 +666,7 @@ def plot_averaged_training_charts(
 def plot_comparison(
         field: str, paths: Sequence[Path], analog_specs: dict, digital_specs: dict,
         ax=None, extra_lines=[], figsize=(8, 5), xlabel="round", linewidth=1.5, quiet=False,
-        both_legends=False, **plot_kwargs):
+        both_legends=None, label='', **plot_kwargs):
     """Plots a comparison between two groups of plots, analog (solid lines) and
     digital (dash lines).
 
@@ -679,7 +679,13 @@ def plot_comparison(
     `extra_lines` can be a list containing some subset of `range`, `quartiles` and
     `confints`. These lines will be added to the plots as thinner lines.
 
-    Other keyword arguments are passed through to the `DataFrame.plot()` function.
+    `both_legends` indicates whether or not to list analog and digital entries
+    in the legend separately. If not provided, this will be inferred from what
+    is being plotted.
+
+    Other keyword arguments are passed through to the `DataFrame.plot()`
+    function. This includes `linewidth` and `label`, which are sometimes
+    modified before being passed through.
     """
     if ax is None:
         plt.figure(figsize=figsize)
@@ -696,14 +702,26 @@ def plot_comparison(
     ana_averages = aggregate_training_chart_data(ana_data, [field], ana_series_keys)
     dig_averages = aggregate_training_chart_data(dig_data, [field], dig_series_keys)
 
+    if both_legends is None:
+        both_legends = (ana_series_keys != dig_series_keys)
+        both_legends = both_legends or (len(ana_series_keys) + len(dig_series_keys) <= 4)
+
     # modify the sample sizes to have both analog and digital
     if not both_legends:
         for (_, ana), (_, dig) in zip(ana_averages[field].items(), dig_averages[field].items()):
             ana.attrs['sample_size'] = f"{ana.attrs['sample_size']} / {dig.attrs['sample_size']}"
 
-    plot_all_dataframes(ana_averages, xlabel=xlabel, axs=[ax], linewidth=linewidth, **plot_kwargs)
+    if label and both_legends:
+        label = label + ' '
+
+    plot_all_dataframes(ana_averages, xlabel=xlabel, axs=[ax], linewidth=linewidth,
+                        label=label + "analog" if both_legends else label,
+                        **plot_kwargs)
     plot_all_dataframes(dig_averages, xlabel=xlabel, axs=[ax], linewidth=linewidth,
-                        linestyle=digital_linestyle, nolabel=not both_legends, **plot_kwargs)
+                        linestyle=digital_linestyle,
+                        nolabel=not both_legends,
+                        label=label + "digital" if both_legends else label,
+                        **plot_kwargs)
 
     for extra in extra_lines:
         reduce_fns, thin_factor = extra_line_specs[extra]
@@ -716,10 +734,11 @@ def plot_comparison(
                                 nolabel=True, linestyle=digital_linestyle, **plot_kwargs)
 
     # add line type indicators for analog and digital
-    x, y = ax.get_children()[0].get_data()
-    ax.plot([x[0]], [y[0]], color='k', label="analog", **plot_kwargs)
-    ax.plot([x[0]], [y[0]], color='k', linestyle=digital_linestyle, label="digital", **plot_kwargs)
-    ax.legend()
+    if not both_legends:
+        x, y = ax.get_children()[0].get_data()
+        ax.plot([x[0]], [y[0]], color='k', label="analog", **plot_kwargs)
+        ax.plot([x[0]], [y[0]], color='k', linestyle=digital_linestyle, label="digital", **plot_kwargs)
+        ax.legend()
 
     title = "analog vs digital\n" + get_title_string(digital_specs)
     ax.set_title(title)
