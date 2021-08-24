@@ -23,15 +23,15 @@ the name of the script.
 The values of all other items, i.e. of all items relating to arguments, are
 sequences comprising at least two items. The first item is a string, one of:
 
-- `'expect'`: Raise an error if any experiment doesn't match this specification.
 - `'filter'`: Skip experiments that don't match this specification. The use of
   this is discouraged, except for the `'script'` argument.
 - `'title'`:  Same as `'filter'`, but also include this spec in the title.
+- `'expect'`: Raise an error if any experiment doesn't match this specification.
+- `'expect-if'`: Raise an error if any experiment passes the filter (including
+  title), but doesn't match this specification.
 - `'series'`: Make each different value of this its own series. If multiple
   arguments have this option, then each unique combination of values gets its
   own series.
-- `'series-expect'`: Like `'expect'`, but raises an error if anything doesn't
-  match.
 
 The second item is a value or a list of values that the argument should match.
 If it's a list, it counts if it matches any value. It can also be the magic
@@ -87,11 +87,9 @@ _action_values = [
     'filter',
     'title',
     'series',
-    'series-expect',
+    'expect-if',
 ]
 _missing_action_values = ['error', 'skip']
-_action_series_values = ['series', 'series-expect']
-_action_expect_values = ['expect', 'series-expect']
 _meta_keys = {
     'missing-action',
     'missing-treat-as',
@@ -287,7 +285,7 @@ def iterspecs(specs):
             raise ValueError(f"unrecognized meta keys: {set(meta.keys()) - _meta_keys}")
 
         # some combinations as strongly inadvisable
-        if action in ["filter", "expect", "title"]:
+        if action in ["filter", "expect", "title", "expect-if"]:
             if spec_value == "__all__":
                 warnings.warn(f"spec for {key} has action {action} and value __all__, "
                               "are you sure about this wasn't meant to be series?")
@@ -307,6 +305,8 @@ def check_spec_match(args: dict, specs: dict, ignore=set()):
     Raises `ValueError` if:
     - the script doesn't match, or
     - a spec with `'expect'` specified doesn't match, or
+    - a spec with `'expect-if'` specified doesn't match and the args otherwise
+      would match, or
     - a spec with `missing-action: error` wasn't found.
 
     Otherwise, returns a list of keys that don't match. Callers who just need
@@ -325,8 +325,9 @@ def check_spec_match(args: dict, specs: dict, ignore=set()):
         raise ValueError(f"Arguments found but not specified: {not_specified_args}")
 
     # Third, check that values match
-    nonmatching_fatal = {}  # {key: (arg_value, spec_value)}, keep track of these
-    nonmatching_skip = []
+    nonmatching_expect = {}     # {key: (arg_value, spec_value)}, keep track of these
+    nonmatching_expect_if = {}  # as above
+    nonmatching_filter = []
 
     for key, action, spec_value, meta in iterspecs(specs):
 
@@ -337,11 +338,11 @@ def check_spec_match(args: dict, specs: dict, ignore=set()):
         elif 'missing-treat-as' in meta:
             arg_value = meta['missing-treat-as']
         elif meta.get('missing-action', 'error') == 'error':
-            nonmatching_fatal[key] = ('__MISSING__', spec_value)
+            nonmatching_expect[key] = ('__MISSING__', spec_value)
             continue
         else:
             assert meta['missing-action'] == 'skip'  # only remaining possibility
-            nonmatching_skip.append(key)
+            nonmatching_filter.append(key)
             continue
 
         if spec_value == '__all__':
@@ -354,18 +355,24 @@ def check_spec_match(args: dict, specs: dict, ignore=set()):
             match = (arg_value == spec_value)
 
         if not match:
-            if action in _action_expect_values:
-                nonmatching_fatal[key] = (arg_value, spec_value)
+            if action == 'expect':
+                nonmatching_expect[key] = (arg_value, spec_value)
+            elif action == 'expect-if':
+                nonmatching_expect_if[key] = (arg_value, spec_value)
             else:
-                nonmatching_skip.append(key)
+                nonmatching_filter.append(key)
 
-    if nonmatching_fatal:
+    # if it passes the filter and 'expect-if' conditions failed, add them to the list
+    if len(nonmatching_filter) == 0:
+        nonmatching_expect.update(nonmatching_expect_if)
+
+    if nonmatching_expect:
         print("Non-matching arguments:")
-        for key, (arg_value, spec_value) in nonmatching_fatal.items():
+        for key, (arg_value, spec_value) in nonmatching_expect.items():
             print(f"{key}: found {arg_value!r}, specified {spec_value!r}")
         raise ValueError("One or more expected arguments didn't match, see above")
 
-    return nonmatching_skip
+    return nonmatching_filter
 
 
 def specs_string(specs, chunk_size=3):
@@ -385,7 +392,7 @@ def get_series_keys(specs) -> tuple:
     return tuple(
         key
         for key, action, _, _ in iterspecs(specs)
-        if action in _action_series_values
+        if action == 'series'
     )
 
 
