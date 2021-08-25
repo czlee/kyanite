@@ -705,8 +705,10 @@ def plot_comparison(
     dig_averages = aggregate_training_chart_data(dig_data, [field], dig_series_keys)
 
     if both_legends is None:
-        both_legends = (ana_series_keys != dig_series_keys)
-        both_legends = both_legends or (len(ana_series_keys) + len(dig_series_keys) <= 4)
+        # show both legends if they're not the same, or if using "analog" /
+        # "digital" linestyle entries wouldn't actually make the legend shorter
+        both_legends = (ana_data.keys() != dig_data.keys())
+        both_legends = both_legends or (len(ana_data) + len(dig_data) <= 4)
 
     # modify the sample sizes to have both analog and digital
     if not both_legends:
@@ -726,7 +728,12 @@ def plot_comparison(
                         **plot_kwargs)
 
     for extra in extra_lines:
-        reduce_fns, thin_factor = extra_line_specs[extra]
+        if isinstance(extra, tuple):  # user override for thin factor
+            extra, thin_factor = extra
+            reduce_fns, _ = extra_line_specs[extra]
+        else:
+            reduce_fns, thin_factor = extra_line_specs[extra]
+
         for reduce_fn in reduce_fns:
             ana_reduced = aggregate_training_chart_data(ana_data, [field], ana_series_keys, reduce_fn)
             dig_reduced = aggregate_training_chart_data(dig_data, [field], dig_series_keys, reduce_fn)
