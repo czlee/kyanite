@@ -120,6 +120,7 @@ abbreviations = {
     'lr_scheduler_client': 'lrsch',
     'qrange_param_quantile': 'qpq',
     'qrange_client_quantile': 'qcq',
+    'parameter_radius_initial': 'Bin',
 }
 
 
