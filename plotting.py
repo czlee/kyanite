@@ -121,6 +121,7 @@ abbreviations = {
     'qrange_param_quantile': 'qpq',
     'qrange_client_quantile': 'qcq',
     'parameter_radius_initial': 'Bin',
+    'qrange_initial': 'qin',
 }
 
 
