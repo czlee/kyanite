@@ -616,11 +616,40 @@ def quartile_upper(x, axis):
     return np.quantile(x, 0.75, axis=axis)
 
 
+# Get confidence interval maximum width for easier reporting (useful sometimes)
+
+def confint_width(x, axis):
+    return st.t.ppf(0.975, x.shape[axis] - 1, loc=0, scale=st.sem(x, axis=axis))
+
+
+def get_confint_max_widths(field: str, paths: Sequence[Path], specs: dict):
+    data = collect_all_training_data(paths, [field], specs, quiet=True)
+    reduced = aggregate_training_chart_data(data, [field], get_series_keys(specs), confint_width)[field]
+    return reduced.max()
+
+
 extra_line_specs = {
     'range': ([np.min, np.max], 1 / 3),
     'quartiles': ([quartile_lower, quartile_upper], 2 / 3),
     'confints': ([confint_lower, confint_upper], 1 / 2),
 }
+
+
+def get_extra_line_spec(extra):
+    """Returns a tuple `reduce_fns, thin_factor`, where `reduce_fns` is a list
+    of statistical functions to run on data (e.g. mean, max, upper quartile),
+    and `thin_factor` is a factor to multiply the original line width by. The
+    input `extra` is intended to come from the user and should be either a tuple
+    comparising a string and a `thin_factor`, or just a string, in which case a
+    default `thin_factor` is returned.
+    """
+    if isinstance(extra, tuple):  # user override for thin factor
+        assert len(extra) == 2, "extra line specs must have two elements (or be just a string)"
+        extra, thin_factor = extra
+        reduce_fns, _ = extra_line_specs[extra]
+        return reduce_fns, thin_factor
+    else:
+        return extra_line_specs[extra]
 
 
 # ==============================================================================
@@ -658,7 +687,7 @@ def plot_averaged_training_charts(
                         axs=axs, nolabel=nolabel, linewidth=linewidth, **plot_kwargs)
 
     for extra in extra_lines:
-        reduce_fns, thin_factor = extra_line_specs[extra]
+        reduce_fns, thin_factor = get_extra_line_spec(extra)
         for reduce_fn in reduce_fns:
             reduced = aggregate_training_chart_data(data, fields, series_keys, reduce_fn=reduce_fn)
             plot_all_dataframes(reduced, axs=axs, nolabel=True, linewidth=linewidth * thin_factor,
@@ -682,8 +711,8 @@ def plot_comparison(
     `confints`. These lines will be added to the plots as thinner lines.
 
     `both_legends` indicates whether or not to list analog and digital entries
-    in the legend separately. If not provided, this will be inferred from what
-    is being plotted.
+    in the legend separately. If not provided, the function will choose
+    something sensible based on what is being plotted.
 
     Other keyword arguments are passed through to the `DataFrame.plot()`
     function. This includes `linewidth` and `label`, which are sometimes
@@ -728,12 +757,7 @@ def plot_comparison(
                         **plot_kwargs)
 
     for extra in extra_lines:
-        if isinstance(extra, tuple):  # user override for thin factor
-            extra, thin_factor = extra
-            reduce_fns, _ = extra_line_specs[extra]
-        else:
-            reduce_fns, thin_factor = extra_line_specs[extra]
-
+        reduce_fns, thin_factor = get_extra_line_spec(extra)
         for reduce_fn in reduce_fns:
             ana_reduced = aggregate_training_chart_data(ana_data, [field], ana_series_keys, reduce_fn)
             dig_reduced = aggregate_training_chart_data(dig_data, [field], dig_series_keys, reduce_fn)
@@ -745,8 +769,10 @@ def plot_comparison(
     # add line type indicators for analog and digital
     if not both_legends:
         x, y = ax.get_children()[0].get_data()
-        ax.plot([x[0]], [y[0]], color='k', label="analog", **plot_kwargs)
-        ax.plot([x[0]], [y[0]], color='k', linestyle=digital_linestyle, label="digital", **plot_kwargs)
+        ax.plot([x[0]], [y[0]], color='black', label="analog",
+                linewidth=linewidth, **plot_kwargs)
+        ax.plot([x[0]], [y[0]], color='black', label="digital", linestyle=digital_linestyle,
+                linewidth=linewidth, **plot_kwargs)
         ax.legend()
 
     title = "analog vs digital\n" + get_title_string(digital_specs)
