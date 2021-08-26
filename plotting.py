@@ -180,6 +180,14 @@ def all_experiment_directories(paths):
     "evaluation.json" file. This recurses over all subdirectories of the given
     paths.
     """
+
+    # as a convenience to the user, check that the paths actually exist
+    for path in paths:
+        if not Path(path).exists():
+            warnings.warn(f"{path} does not exist")
+        elif not Path(path).is_dir():
+            warnings.warn(f"{path} is not a directory")
+
     directories = [
         Path(dirpath)
         for path in paths
