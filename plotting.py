@@ -667,7 +667,7 @@ def get_extra_line_spec(extra):
 def plot_averaged_training_charts(
         paths: Sequence[Path], fields: Sequence[str], specs: dict,
         axs=None, extra_lines=[], nolabel=False, linewidth=1.5, xlabel="round", quiet=False,
-        **plot_kwargs):
+        ylims=None, **plot_kwargs):
     """Plots training charts (i.e., metrics vs round number) from results in `paths`,
     for each of the metrics specified in `fields`.
 
@@ -681,6 +681,10 @@ def plot_averaged_training_charts(
 
     If `nolabel` is True, it assigns no label to the main plot series (so it
     won't appear in the legend).
+
+    If `ylims` is provided, it must be a list of 2-tuples, and each will be passed
+    to the corresponding `ax.set_ylim()`. This is just a convenience to avoid
+    having to pass in `axs` just to set ylims.
 
     Other keyword arguments are passed through to the `DataFrame.plot()` function.
     """
@@ -700,6 +704,10 @@ def plot_averaged_training_charts(
             reduced = aggregate_training_chart_data(data, fields, series_keys, reduce_fn=reduce_fn)
             plot_all_dataframes(reduced, axs=axs, nolabel=True, linewidth=linewidth * thin_factor,
                                 **plot_kwargs)
+
+    if ylims is not None:
+        for ax, ylim in zip(axs, ylims):
+            ax.set_ylim(ylim)
 
 
 def plot_comparison(
