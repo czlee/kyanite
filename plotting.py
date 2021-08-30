@@ -14,17 +14,21 @@ The keys are the argument names, e.g. `'clients'`, `'noise'`, `'lr_client'`.
 Every argument that may be encountered must be specified explicitly. This is to
 avoid accidentally averaging values that should be treated as different cases.
 
-There is one special key, `'script'`, which (as you'd expect) specifies the
-script. The main thing that makes this key special is that all of the other
-arguments depend on it, since different scripts take different arguments. For
-this reason, the value attached to `'script'` should just be a single string,
-the name of the script.
+There is one special key, `'experiment'`, which (as you'd expect) specifies the
+experiment class. The main thing that makes this key special is that all of the
+other arguments depend on it, since different scripts take different arguments.
+For this reason, the value attached to `'experiment'` should just be a single
+string, the name of the experiment class, as specified in the subcommand to
+`'run.py'`.
+
+(The old special key is `'script'`, which is still supported for legacy reasons,
+but isn't relevant to any script run using `run.py`.)
 
 The values of all other items, i.e. of all items relating to arguments, are
 sequences comprising at least two items. The first item is a string, one of:
 
 - `'filter'`: Skip experiments that don't match this specification. The use of
-  this is discouraged, except for the `'script'` argument.
+  this is discouraged.
 - `'title'`:  Same as `'filter'`, but also include this spec in the title.
 - `'expect'`: Raise an error if any experiment doesn't match this specification.
 - `'expect-if'`: Raise an error if any experiment passes the filter (including
@@ -32,6 +36,11 @@ sequences comprising at least two items. The first item is a string, one of:
 - `'series'`: Make each different value of this its own series. If multiple
   arguments have this option, then each unique combination of values gets its
   own series.
+
+Note on `'expect'`: Experiments that have a different experiment class are
+skipped (filtered) and the other arguments won't check, so all specifications
+using `'expect'` are read as "expect if the experiment class matches, ignore
+otherwise".
 
 The second item is a value or a list of values that the argument should match.
 If it's a list, it counts if it matches any value. It can also be the magic
@@ -143,7 +152,10 @@ def get_args(directory: Path):
     """
     contents = get_args_file(directory)
     args = contents['args']
-    args['script'] = contents['script']
+
+    if contents['script'] != 'run.py':
+        assert 'experiment' not in args
+        args['experiment'] = contents['script']
 
     # Ignore parameters that don't affect plots
     if 'save_models' in args:
@@ -222,7 +234,7 @@ def show_timestamp_info(paths, specs=None):
 
         if specs is not None:
             args = get_args(directory)
-            if args['script'] != specs['script'] or len(check_spec_match(args, specs)) > 0:
+            if args['experiment'] != specs['experiment'] or len(check_spec_match(args, specs)) > 0:
                 continue
 
         start = datetime.datetime.strptime(get_args_file(directory)['started'], isofmt)
@@ -255,10 +267,24 @@ def show_timestamp_info(paths, specs=None):
 # Argument specification dictionary handling
 # ==============================================================================
 
+def verify_specs(specs):
+    """Show a useful warning if 'script' is in `specs` rather than 'experiment'.
+    This is mostly to assist with the deprecation of the 'script' key in favor
+    of 'experiment', which in turn was because of the refactoring of scripts to
+    start from a single "run.py" script. Should be called from top-level
+    functions. Operates in-place.
+    """
+    if 'script' in specs and 'experiment' not in specs:
+        warnings.warn("The 'script' key in specs is deprecated, please change it to 'experiment'.")
+        specs['experiment'] = specs['script']
+        del specs['script']
+
+
 def iterspecs(specs):
     """Convenience function iterating through an argument specification
     dictionary (as described above). This does some preprocessing, namely:
-    - It skips the special "script" key. Callers should handle this separately.
+    - It skips the special "experiment" key. Callers should handle this
+      separately.
     - If the "meta" dict isn't given, it fills it in with an empty dict.
     - It raises errors if anything looks wrong.
 
@@ -270,7 +296,7 @@ def iterspecs(specs):
     """
 
     for key, spec in specs.items():
-        if key == 'script':
+        if key == 'experiment':
             continue
 
         if len(spec) == 2:
@@ -313,7 +339,7 @@ def check_spec_match(args: dict, specs: dict, ignore=set()):
     """Checks if the `args` (as returned by `get_args()`) satisfy the `specs`.
 
     Raises `ValueError` if:
-    - the script doesn't match, or
+    - the experiment class doesn't match, or
     - a spec with `'expect'` specified doesn't match, or
     - a spec with `'expect-if'` specified doesn't match and the args otherwise
       would match, or
@@ -324,13 +350,14 @@ def check_spec_match(args: dict, specs: dict, ignore=set()):
     if it matches in full, the list of nonmatching keys will be empty.
     """
 
-    # First, check the script.
-    if args['script'] != specs['script']:
-        raise ValueError(f"Script didn't match: found {args['script']}, specified {specs['script']}")
+    # First, check the experiment class.
+    if args['experiment'] != specs['experiment']:
+        raise ValueError(f"Experiment class didn't match: found {args['experiment']}, "
+                         f"specified {specs['experiment']}")
 
     # Second, check that every key in 'args' is specified
 
-    not_specified_args = set(args.keys()) - set(specs.keys()) - ignore - {'script'}
+    not_specified_args = set(args.keys()) - set(specs.keys()) - ignore - {'experiment'}
     if not_specified_args:
         raise ValueError(f"Arguments found but not specified: {not_specified_args}")
 
@@ -505,7 +532,7 @@ def plot_all_dataframes(dataframes: dict, title_suffix=None, xlabel=None, axs=No
 
 
 def collect_all_training_data(paths: Sequence[Path], fields: Sequence[str], specs, quiet=False,
-                              other_scripts=[]):
+                              other_experiments=[]):
     """Returns a dict of dicts of `DataFrame` objects, representing all training
     data relevant to the specifications in `specs`. For example:
 
@@ -529,17 +556,18 @@ def collect_all_training_data(paths: Sequence[Path], fields: Sequence[str], spec
 
     `specs` is as described in "Argument specification dictionaries" above.
     """
+    verify_specs(specs)
 
     data = {}
-    skipped_scripts = Counter()
+    skipped_experiments = Counter()
     skipped_keys = Counter()
     skipped_for_keys = 0
 
     for directory in all_experiment_directories(paths):
         args = get_args(directory)
-        if args['script'] != specs['script']:
-            if args['script'] not in other_scripts:
-                skipped_scripts[args['script']] += 1
+        if args['experiment'] != specs['experiment']:
+            if args['experiment'] not in other_experiments:
+                skipped_experiments[args['experiment']] += 1
             continue
 
         series = get_series_values(args, specs)
@@ -558,16 +586,16 @@ def collect_all_training_data(paths: Sequence[Path], fields: Sequence[str], spec
             data[series][field][directory] = training[field]
 
     if verbosity > 0 and not quiet:
-        print_skipped(skipped_scripts, skipped_keys, skipped_for_keys)
+        print_skipped(skipped_experiments, skipped_keys, skipped_for_keys)
 
     return data
 
 
-def print_skipped(skipped_scripts, skipped_keys, skipped_for_keys):
-    if skipped_scripts:
-        skipped_list = ", ".join(f"{s} ({c})" for s, c in skipped_scripts.most_common())
-        print(f"- Skipping {sum(skipped_scripts.values())} runs using "
-              f"{len(skipped_scripts)} other scripts: {skipped_list}")
+def print_skipped(skipped_experiments, skipped_keys, skipped_for_keys):
+    if skipped_experiments:
+        skipped_list = ", ".join(f"{s} ({c})" for s, c in skipped_experiments.most_common())
+        print(f"- Skipping {sum(skipped_experiments.values())} runs using "
+              f"{len(skipped_experiments)} other experiment classes: {skipped_list}")
 
     if skipped_for_keys or skipped_keys:
         skipped_list = ", ".join(f"{k} ({c})" for k, c in skipped_keys.most_common())
@@ -637,9 +665,9 @@ def get_confint_max_widths(field: str, paths: Sequence[Path], specs: dict):
 
 
 extra_line_specs = {
-    'range': ([np.min, np.max], 1 / 3),
-    'quartiles': ([quartile_lower, quartile_upper], 2 / 3),
-    'confints': ([confint_lower, confint_upper], 1 / 2),
+    'range': ([np.min, np.max], 1 / 5),
+    'quartiles': ([quartile_lower, quartile_upper], 1 / 3),
+    'confints': ([confint_lower, confint_upper], 1 / 5),
 }
 
 
@@ -688,6 +716,7 @@ def plot_averaged_training_charts(
 
     Other keyword arguments are passed through to the `DataFrame.plot()` function.
     """
+    verify_specs(specs)
 
     data = collect_all_training_data(paths, fields, specs, quiet=quiet)
     series_keys = get_series_keys(specs)
@@ -734,6 +763,9 @@ def plot_comparison(
     function. This includes `linewidth` and `label`, which are sometimes
     modified before being passed through.
     """
+    verify_specs(analog_specs)
+    verify_specs(digital_specs)
+
     if ax is None:
         plt.figure(figsize=figsize)
         ax = plt.axes()
@@ -741,9 +773,9 @@ def plot_comparison(
     digital_linestyle = (0, (4, 2, 1, 2))
 
     ana_data = collect_all_training_data(paths, [field], analog_specs,
-                                         quiet=quiet, other_scripts=digital_specs['script'])
+                                         quiet=quiet, other_experiments=digital_specs['experiment'])
     dig_data = collect_all_training_data(paths, [field], digital_specs,
-                                         quiet=quiet, other_scripts=analog_specs['script'])
+                                         quiet=quiet, other_experiments=analog_specs['experiment'])
     ana_series_keys = get_series_keys(analog_specs)
     dig_series_keys = get_series_keys(digital_specs)
     ana_averages = aggregate_training_chart_data(ana_data, [field], ana_series_keys)
