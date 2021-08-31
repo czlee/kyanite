@@ -559,6 +559,7 @@ def collect_all_training_data(paths: Sequence[Path], fields: Sequence[str], spec
     verify_specs(specs)
 
     data = {}
+    matched = 0
     skipped_experiments = Counter()
     skipped_keys = Counter()
     skipped_for_keys = 0
@@ -585,13 +586,17 @@ def collect_all_training_data(paths: Sequence[Path], fields: Sequence[str], spec
         for field in fields:
             data[series][field][directory] = training[field]
 
+        matched += 1
+
     if verbosity > 0 and not quiet:
-        print_skipped(skipped_experiments, skipped_keys, skipped_for_keys)
+        print_skipped(matched, skipped_experiments, skipped_keys, skipped_for_keys)
 
     return data
 
 
-def print_skipped(skipped_experiments, skipped_keys, skipped_for_keys):
+def print_skipped(matched, skipped_experiments, skipped_keys, skipped_for_keys):
+    print(f"- Matched {matched} runs")
+
     if skipped_experiments:
         skipped_list = ", ".join(f"{s} ({c})" for s, c in skipped_experiments.most_common())
         print(f"- Skipping {sum(skipped_experiments.values())} runs using "
